@@ -405,9 +405,19 @@ def extract_modified_content(response, file_path):
         f"Modified File {file_path}:\n",
         f"Modified content of {file_path}:\n",
         f"Updated {file_path}:\n",
-        "```python\n",  # For code blocks
-        "```\n"         # For generic code blocks
     ]
+    
+    # Check for code block markers and clean them up
+    if response.startswith("```") and "```" in response[3:]:
+        # Remove starting code block marker and language identifier if present
+        first_newline = response.find("\n")
+        if first_newline != -1:
+            response = response[first_newline + 1:]
+        
+        # Remove trailing code block marker
+        last_backtick = response.rfind("```")
+        if last_backtick != -1:
+            response = response[:last_backtick].strip()
     
     # First, try to find structured content based on patterns
     for pattern in patterns:
@@ -416,27 +426,25 @@ def extract_modified_content(response, file_path):
             if len(parts) > 1:
                 content = parts[1]
                 
-                # If this is a code block, find the closing code block marker
-                if pattern.startswith("```"):
-                    if "```" in content:
-                        content = content.split("```", 1)[0].strip()
+                # Look for other patterns that might indicate the end of content
+                end_markers = [
+                    "\n\nExplanation:",
+                    "\n\nHere's what changed:",
+                    "\n\nThe changes include:",
+                    "\n\nI've made the following changes:"
+                ]
                 
-                # Otherwise, look for other patterns that might indicate the end of content
-                else:
-                    # Check for other start patterns that might appear later (indicating different sections)
-                    end_markers = [
-                        "\n\nExplanation:",
-                        "\n\nHere's what changed:",
-                        "\n\nThe changes include:",
-                        "\n\nI've made the following changes:"
-                    ]
-                    
-                    for marker in end_markers:
-                        if marker in content:
-                            content = content.split(marker, 1)[0]
+                for marker in end_markers:
+                    if marker in content:
+                        content = content.split(marker, 1)[0]
                 
-                # Remove any trailing code block markers
+                # Final cleanup for any remaining code block markers
                 content = content.strip()
+                if content.startswith("```"):
+                    if "\n" in content:
+                        content = content.split("\n", 1)[1]
+                    else:
+                        content = content[3:].strip()
                 if content.endswith("```"):
                     content = content[:-3].strip()
                 
@@ -469,6 +477,15 @@ def extract_modified_content(response, file_path):
         use_raw = input(f"{Fore.YELLOW}Do you want to use this raw response as the file content? (y/n): {Style.RESET_ALL}").lower()
         if use_raw != 'y' and use_raw != 'yes':
             return None
+    
+    # Final cleanup for raw response
+    if response.startswith("```"):
+        if "\n" in response:
+            response = response.split("\n", 1)[1]
+        else:
+            response = response[3:].strip()
+    if response.endswith("```"):
+        response = response[:-3].strip()
     
     return response
 
@@ -651,9 +668,12 @@ def handle_edit_query(user_input, conversation_history):
     prompt += original_content + "\n\n"
     prompt += f"Please provide the modified content of {file_path} after making the required changes.\n"
     prompt += f"Format your response as:\nModified {file_path}:\n[entire file content with changes]\n"
-    prompt += "Only include the modified file content, not explanations or additional context.\n"
-    prompt += "Do not include examples, other files, or file content that was provided in the conversation history.\n"
-    prompt += "Do not include markdown formatting like triple backticks (```) in your response."
+    prompt += "IMPORTANT FORMATTING INSTRUCTIONS:\n"
+    prompt += "1. ONLY include the modified file content, NOT explanations or comments about what you changed.\n"
+    prompt += "2. DO NOT include code blocks with triple backticks (```) at the start or end of the content.\n"
+    prompt += "3. DO NOT include examples, other files, or any content from the conversation history.\n"
+    prompt += "4. DO NOT include any markdown formatting in your response.\n"
+    prompt += "5. Return ONLY the raw file content exactly as it should be saved."
     
     # Add the edit request to conversation history
     conversation_history.append({"role": "user", "content": prompt})
