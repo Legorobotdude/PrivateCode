@@ -64,9 +64,10 @@ A terminal-based coding assistant that uses local Large Language Models (LLMs) v
    > How can I improve these two files? [file1.py] [file2.py]
    ```
 
-3. Use web search by prefixing your query with `search:`:
+3. Use web search by prefixing your query with `search:` or `search `:
    ```
    > search: Python requests library documentation
+   > search Python requests library documentation
    ```
 
 4. Combine web search with file context:
@@ -79,19 +80,22 @@ A terminal-based coding assistant that uses local Large Language Models (LLMs) v
    > How to use the API described in [https://api.example.com/docs]
    ```
 
-6. Edit files by prefixing your query with `edit:`:
+6. Edit files by prefixing your query with `edit:` or `edit `:
    ```
    > edit: [example.py] to add error handling to the parse_json function
+   > edit [example.py] to add error handling to the parse_json function
    ```
    You'll see a diff of proposed changes and be asked to confirm before saving.
 
-7. Run commands by prefixing your query with `run:`:
+7. Run commands by prefixing your query with `run:` or `run `:
    ```
    > run: the tests for this project
+   > run the tests for this project
    ```
    The LLM will suggest a command based on your description, or you can specify:
    ```
    > run: 'python example.py'
+   > run 'python example.py'
    ```
    All commands require confirmation before execution for safety.
 

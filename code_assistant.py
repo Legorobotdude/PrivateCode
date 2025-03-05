@@ -302,39 +302,54 @@ def extract_file_paths_and_urls(query):
 
 def is_search_query(query):
     """Check if the query is a search request."""
-    return query.lower().startswith('search:')
+    query = query.lower()
+    return query.startswith('search:') or query.startswith('search ')
 
 
 def is_edit_query(query):
     """Check if the query is a file edit request."""
-    return query.lower().startswith('edit:')
+    query = query.lower()
+    return query.startswith('edit:') or query.startswith('edit ')
 
 
 def is_run_query(query):
     """Check if the query is a command execution request."""
-    return query.lower().startswith('run:')
+    query = query.lower()
+    return query.startswith('run:') or query.startswith('run ')
 
 
 def extract_search_query(query):
     """Extract the search term from a search query."""
-    if is_search_query(query):
+    query = query.lower()
+    if query.startswith('search:'):
         # Remove 'search:' prefix and trim whitespace
+        return query[7:].strip()
+    elif query.startswith('search '):
+        # Remove 'search ' prefix and trim whitespace
         return query[7:].strip()
     return query
 
 
 def extract_edit_query(query):
     """Extract the edit instruction from an edit query."""
-    if is_edit_query(query):
+    query = query.lower()
+    if query.startswith('edit:'):
         # Remove 'edit:' prefix and trim whitespace
+        return query[5:].strip()
+    elif query.startswith('edit '):
+        # Remove 'edit ' prefix and trim whitespace
         return query[5:].strip()
     return query
 
 
 def extract_run_query(query):
     """Extract the command or description from a run query."""
-    if is_run_query(query):
+    query = query.lower()
+    if query.startswith('run:'):
         # Remove 'run:' prefix and trim whitespace
+        return query[4:].strip()
+    elif query.startswith('run '):
+        # Remove 'run ' prefix and trim whitespace
         return query[4:].strip()
     return query
 
@@ -499,9 +514,9 @@ def main():
     print("Enter your coding questions and include file paths in square brackets.")
     print("Example: How can I improve this code? [main.py]")
     print()
-    print("For web searches, prefix with 'search:' - Example: search: Python requests library")
-    print("For file editing, prefix with 'edit:' - Example: edit: [main.py] to fix the function")
-    print("For running commands, prefix with 'run:' - Example: run: the tests or run: 'python test.py'")
+    print("For web searches, prefix with 'search:' or 'search ' - Example: search: Python requests library")
+    print("For file editing, prefix with 'edit:' or 'edit ' - Example: edit: [main.py] to fix the function")
+    print("For running commands, prefix with 'run:' or 'run ' - Example: run: the tests or run: 'python test.py'")
     print("Include URLs in brackets - Example: How to use this API? [https://api.example.com/docs]")
     print()
     print("Type 'exit' to quit.")
