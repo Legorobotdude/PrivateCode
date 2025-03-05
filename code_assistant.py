@@ -673,7 +673,9 @@ def handle_edit_query(user_input, conversation_history):
     prompt += "2. DO NOT include code blocks with triple backticks (```) at the start or end of the content.\n"
     prompt += "3. DO NOT include examples, other files, or any content from the conversation history.\n"
     prompt += "4. DO NOT include any markdown formatting in your response.\n"
-    prompt += "5. Return ONLY the raw file content exactly as it should be saved."
+    prompt += "5. Return ONLY the raw file content exactly as it should be saved.\n"
+    prompt += "6. If asked to add blank lines, whitespace, or other formatting changes, implement them literally without adding comments about them.\n"
+    prompt += "7. DO NOT add explanatory comments to the code unless explicitly asked to do so."
     
     # Add the edit request to conversation history
     conversation_history.append({"role": "user", "content": prompt})
