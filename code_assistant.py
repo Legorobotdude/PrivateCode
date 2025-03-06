@@ -10,6 +10,7 @@ Features:
 - Search the web for information
 - Edit files with AI assistance
 - Run commands with AI guidance
+- Create new empty files
 - Switch between different Ollama models
 - Display or hide AI "thinking" process
 - Read specific line ranges from files using [filename:start-end] syntax
@@ -22,6 +23,7 @@ Examples:
   python code_assistant.py "Search: latest developments in quantum computing"
   python code_assistant.py "Edit: [main.py] Add error handling to the main function"
   python code_assistant.py "Run: Write a script to sort files by extension"
+  python code_assistant.py "Create: [newfile.py]"
   python code_assistant.py "Model: llama3"
   python code_assistant.py "Show only lines 10-20 of my file [myfile.py:10-20]"
 """
@@ -33,6 +35,7 @@ import sys
 import os
 import difflib
 import subprocess
+from pathlib import Path
 from bs4 import BeautifulSoup
 from urllib.parse import quote_plus, urlparse
 from shutil import copyfile
@@ -487,6 +490,20 @@ def is_model_query(query):
     return query.lower().startswith(("model:", "model ", "use model:", "use model "))
 
 
+def is_create_query(query):
+    """Check if the query is a file creation request."""
+    return query.lower().startswith(("create:", "create "))
+
+
+def extract_create_query(query):
+    """Extract the file path from a create query."""
+    if query.lower().startswith("create:"):
+        return query[7:].strip()
+    elif query.lower().startswith("create "):
+        return query[7:].strip()
+    return query
+
+
 def extract_search_query(query):
     """Extract the actual search query from the input."""
     if query.lower().startswith("search:"):
@@ -899,6 +916,7 @@ def main():
     print("For file editing, prefix with 'edit:' or 'edit ' - Example: edit: [main.py] to fix the function")
     print("For running commands, prefix with 'run:' or 'run ' - Example: run: the tests or run: 'python test.py'")
     print("For changing models, prefix with 'model:' or 'model ' - Example: model: llama3 or model: codellama")
+    print("For creating new files, prefix with 'create:' or 'create ' - Example: create: [newfile.py]")
     print("Include URLs in brackets - Example: How to use this API? [https://api.example.com/docs]")
     print()
     print("Special commands:")
@@ -954,6 +972,7 @@ def main():
         edit_mode = is_edit_query(user_input)
         run_mode = is_run_query(user_input)
         model_mode = is_model_query(user_input)
+        create_mode = is_create_query(user_input)
         
         # Handle different query types
         if search_mode:
@@ -964,6 +983,8 @@ def main():
             handle_run_query(user_input, conversation_history)
         elif model_mode:
             handle_model_query(user_input, conversation_history)
+        elif create_mode:
+            handle_create_query(user_input, conversation_history)
         else:
             handle_regular_query(user_input, conversation_history)
 
@@ -1256,6 +1277,40 @@ def handle_model_query(user_input, conversation_history):
     except Exception as e:
         print(f"{Fore.RED}Error processing model change: {e}{Style.RESET_ALL}")
         print(f"{Fore.YELLOW}Model change failed. Still using: {CURRENT_MODEL}{Style.RESET_ALL}")
+
+
+def handle_create_query(user_input, conversation_history):
+    """Handle file creation queries."""
+    create_query = extract_create_query(user_input)
+    clean_query, file_items, _ = extract_file_paths_and_urls(create_query)
+    
+    if not file_items:
+        print(f"{Fore.YELLOW}No file path specified. Use [file_path] with create:.{Style.RESET_ALL}")
+        return
+    
+    for file_item in file_items:
+        if isinstance(file_item, tuple):
+            file_path = file_item[0]
+        else:
+            file_path = file_item
+            
+        if os.path.exists(file_path):
+            print(f"{Fore.YELLOW}File '{file_path}' already exists.{Style.RESET_ALL}")
+            confirm = input(f"{Fore.YELLOW}Overwrite with an empty file? (y/n): {Style.RESET_ALL}").lower()
+            if confirm != 'y':
+                print(f"{Fore.YELLOW}File creation cancelled for '{file_path}'.{Style.RESET_ALL}")
+                continue
+        
+        confirm = input(f"{Fore.YELLOW}Create '{file_path}'? (y/n): {Style.RESET_ALL}").lower()
+        if confirm == 'y':
+            try:
+                Path(file_path).touch()
+                print(f"{Fore.GREEN}Created '{file_path}'.{Style.RESET_ALL}")
+                conversation_history.append({"role": "system", "content": f"Created file '{file_path}'."})
+            except Exception as e:
+                print(f"{Fore.RED}Error creating '{file_path}': {e}{Style.RESET_ALL}")
+        else:
+            print(f"{Fore.YELLOW}File creation cancelled for '{file_path}'.{Style.RESET_ALL}")
 
 
 def handle_regular_query(user_input, conversation_history):

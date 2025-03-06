@@ -42,3 +42,4 @@ ENV/
 # Logs
 *.log
 logs/ 
+tests/C
