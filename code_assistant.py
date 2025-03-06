@@ -54,34 +54,106 @@ def check_ollama_connection():
         return False
 
 
-def read_file_content(file_path):
-    """Read content from a file, handling potential errors."""
+def detect_file_encoding(file_path):
+    """Detect the encoding of a file.
+    
+    Returns:
+        tuple: (encoding, bom) where bom is True if the file has a BOM
+    """
+    # Try to detect encoding with these common types
+    encodings_to_try = ['utf-8', 'utf-8-sig', 'utf-16', 'utf-16-le', 'utf-16-be', 'latin-1', 'cp1252']
+    
+    # First check for BOM using binary mode
     try:
-        with open(file_path, 'r', encoding='utf-8') as file:
-            return file.read()
-    except FileNotFoundError:
+        with open(file_path, 'rb') as f:
+            raw = f.read(4)  # Read first 4 bytes to check for BOM
+            # Check for BOM markers
+            if raw.startswith(b'\xef\xbb\xbf'):  # UTF-8 BOM
+                return 'utf-8-sig', True
+            elif raw.startswith(b'\xff\xfe'):  # UTF-16 LE BOM
+                return 'utf-16-le', True
+            elif raw.startswith(b'\xfe\xff'):  # UTF-16 BE BOM
+                return 'utf-16-be', True
+    except Exception:
+        pass  # Fall back to detection by reading the file
+        
+    # Try each encoding
+    for encoding in encodings_to_try:
+        try:
+            with open(file_path, 'r', encoding=encoding) as f:
+                f.read()
+                # If we got here, the encoding worked
+                return encoding, encoding.endswith('-sig')
+        except UnicodeDecodeError:
+            continue
+        except Exception:
+            break
+    
+    # Default to UTF-8 if we couldn't detect
+    return 'utf-8', False
+
+
+def read_file_content(file_path):
+    """Read content from a file, handling potential errors and encoding issues."""
+    if not os.path.exists(file_path):
         print(f"Warning: File '{file_path}' not found.")
         return None
+        
+    try:
+        # Detect the encoding
+        encoding, has_bom = detect_file_encoding(file_path)
+        
+        # Read the file with the detected encoding
+        with open(file_path, 'r', encoding=encoding) as file:
+            content = file.read()
+            
+        # Let the user know if we're using a non-standard encoding
+        if encoding != 'utf-8' and encoding != 'utf-8-sig':
+            print(f"Note: File '{file_path}' was read with {encoding} encoding.")
+            
+        return content
+            
     except Exception as e:
-        print(f"Error reading file '{file_path}': {e}")
-        return None
+        # If all else fails, try binary mode as a last resort
+        try:
+            with open(file_path, 'rb') as file:
+                binary_content = file.read()
+                # Try to decode as latin-1 which can handle any byte value
+                print(f"Warning: Using binary fallback for '{file_path}'")
+                return binary_content.decode('latin-1', errors='replace')
+        except Exception as e2:
+            print(f"Error reading file '{file_path}': {e2}")
+            return None
 
 
 def write_file_content(file_path, content, create_backup=True):
-    """Write content to a file, optionally creating a backup first."""
+    """Write content to a file, preserving the original encoding."""
     try:
-        # Create a backup if the file exists and backup is requested
-        if os.path.exists(file_path) and create_backup:
-            backup_path = f"{file_path}.bak"
-            try:
-                copyfile(file_path, backup_path)
-                print(f"Created backup at {backup_path}")
-            except Exception as e:
-                print(f"Warning: Could not create backup: {e}")
+        # Get the file's original encoding if it exists
+        original_encoding = 'utf-8'  # Default encoding
+        has_bom = False
         
-        # Write the new content
-        with open(file_path, 'w', encoding='utf-8') as file:
+        if os.path.exists(file_path):
+            # Detect the existing encoding
+            original_encoding, has_bom = detect_file_encoding(file_path)
+            
+            # Create a backup if requested
+            if create_backup:
+                backup_path = f"{file_path}.bak"
+                try:
+                    copyfile(file_path, backup_path)
+                    print(f"Created backup at {backup_path}")
+                except Exception as e:
+                    print(f"Warning: Could not create backup: {e}")
+        
+        # Write with detected encoding
+        with open(file_path, 'w', encoding=original_encoding) as file:
             file.write(content)
+            
+        # Log the encoding used
+        if original_encoding != 'utf-8' and original_encoding != 'utf-8-sig':
+            print(f"Note: File '{file_path}' was written with {original_encoding} encoding to match the original.")
+            
         return True
     except Exception as e:
         print(f"Error writing to file '{file_path}': {e}")
@@ -398,96 +470,102 @@ def get_ollama_response(history, model=DEFAULT_MODEL):
 
 def extract_modified_content(response, file_path):
     """Extract the modified content from the LLM's response."""
-    # Look for content after "Modified [file_path]:" or similar patterns
+    # First, clean up the raw response - remove any markdown formatting (```), code block indicators, etc.
+    cleaned_response = response.strip()
+    
+    # If it starts and ends with code blocks, remove them
+    if cleaned_response.startswith("```") and "```" in cleaned_response[3:]:
+        # Find the first line break after the opening ```
+        first_line_break = cleaned_response.find("\n", 3)
+        if first_line_break != -1:
+            # Skip the language identifier line
+            cleaned_response = cleaned_response[first_line_break + 1:]
+        
+        # Find and remove the closing code block
+        last_code_block = cleaned_response.rfind("```")
+        if last_code_block != -1:
+            cleaned_response = cleaned_response[:last_code_block].strip()
+    
+    # Fix indentation issues - check if there's consistent indentation
+    lines = cleaned_response.split('\n')
+    if len(lines) > 5:  # Only do this for responses with sufficient lines
+        # Count leading spaces for non-empty lines
+        indents = []
+        for line in lines:
+            if line.strip():  # Skip empty lines
+                spaces = len(line) - len(line.lstrip())
+                indents.append(spaces)
+        
+        # Find most common indent
+        if indents:
+            from collections import Counter
+            most_common_indent, count = Counter(indents).most_common(1)[0]
+            
+            # If most lines have the same non-zero indent, remove it
+            if most_common_indent > 0 and count > len(lines) * 0.5:  # If >50% of lines have this indent
+                print(f"Note: Removing {most_common_indent} spaces of indentation from response")
+                cleaned_lines = []
+                for line in lines:
+                    if line.startswith(' ' * most_common_indent):
+                        cleaned_lines.append(line[most_common_indent:])
+                    else:
+                        cleaned_lines.append(line)
+                cleaned_response = '\n'.join(cleaned_lines)
+    
+    # Try to find the actual file content using heuristics
+    # First, look for patterns like "Modified [file]:" or "Updated [file]:"
     patterns = [
-        f"Modified {file_path}:\n",
-        f"MODIFIED {file_path}:\n",
-        f"Modified File {file_path}:\n",
-        f"Modified content of {file_path}:\n",
-        f"Updated {file_path}:\n",
+        f"Modified {file_path}:",
+        f"modified {file_path}:",
+        f"Updated {file_path}:",
+        f"updated {file_path}:",
+        f"Modified content of {file_path}:",
+        f"Content of {file_path}:",
+        f"File content for {file_path}:",
     ]
     
-    # Check for code block markers and clean them up
-    if response.startswith("```") and "```" in response[3:]:
-        # Remove starting code block marker and language identifier if present
-        first_newline = response.find("\n")
-        if first_newline != -1:
-            response = response[first_newline + 1:]
-        
-        # Remove trailing code block marker
-        last_backtick = response.rfind("```")
-        if last_backtick != -1:
-            response = response[:last_backtick].strip()
-    
-    # First, try to find structured content based on patterns
+    file_content = None
     for pattern in patterns:
-        if pattern in response:
-            parts = response.split(pattern, 1)
-            if len(parts) > 1:
-                content = parts[1]
-                
-                # Look for other patterns that might indicate the end of content
-                end_markers = [
-                    "\n\nExplanation:",
-                    "\n\nHere's what changed:",
-                    "\n\nThe changes include:",
-                    "\n\nI've made the following changes:"
-                ]
-                
-                for marker in end_markers:
-                    if marker in content:
-                        content = content.split(marker, 1)[0]
-                
-                # Final cleanup for any remaining code block markers
-                content = content.strip()
-                if content.startswith("```"):
-                    if "\n" in content:
-                        content = content.split("\n", 1)[1]
-                    else:
-                        content = content[3:].strip()
-                if content.endswith("```"):
-                    content = content[:-3].strip()
-                
-                return content
+        if pattern in cleaned_response:
+            # Split at the pattern and take what follows
+            content = cleaned_response.split(pattern, 1)[1].strip()
+            
+            # Look for end markers like "Explanation:" that might signal the end of the content
+            end_markers = [
+                "\nExplanation:",
+                "\nChanges made:",
+                "\nHere's what changed:",
+                "\nReasoning:",
+                "\nSummary of changes:"
+            ]
+            
+            for marker in end_markers:
+                if marker in content:
+                    content = content.split(marker, 1)[0].strip()
+            
+            file_content = content
+            break
     
-    # If we couldn't extract using patterns, try a more aggressive approach
-    # to extract content between code blocks if present
-    if "```" in response:
-        code_blocks = response.split("```")
-        # If we have at least one complete code block (opening and closing ```)
-        if len(code_blocks) >= 3:
-            # First element is before the opening ```, second is the content
-            content = code_blocks[1]
-            # Remove the language indicator if present (like "python")
-            if "\n" in content:
-                content = content.split("\n", 1)[1]
-            return content.strip()
+    # If we couldn't find a pattern match but the content looks like code
+    # (i.e., not starting with explanation text), use it directly
+    if file_content is None and not cleaned_response.lower().startswith(("here", "the ", "i've", "this")):
+        file_content = cleaned_response
     
-    # If no pattern matched, return the raw response with a warning
-    print(f"{Fore.YELLOW}Warning: Could not identify modified content section. Using raw response.{Style.RESET_ALL}")
-    print(f"{Fore.YELLOW}The response might need cleanup before saving.{Style.RESET_ALL}")
-    
-    # Ask user if they want to see the raw response
-    show_raw = input(f"{Fore.YELLOW}Do you want to see the raw response to manually extract content? (y/n): {Style.RESET_ALL}").lower()
-    if show_raw == 'y' or show_raw == 'yes':
-        print("\nRaw response:")
-        print(response)
+    # If we still don't have content, give the user the option to see the raw response
+    if file_content is None:
+        print(f"{Fore.YELLOW}Warning: Could not clearly identify file content in the LLM's response.{Style.RESET_ALL}")
+        show_raw = input(f"{Fore.YELLOW}Do you want to see the raw response to manually extract content? (y/n): {Style.RESET_ALL}").lower()
         
-        # Give user option to manually extract content
-        use_raw = input(f"{Fore.YELLOW}Do you want to use this raw response as the file content? (y/n): {Style.RESET_ALL}").lower()
-        if use_raw != 'y' and use_raw != 'yes':
-            return None
+        if show_raw in ('y', 'yes'):
+            print("\nRaw response:")
+            print(cleaned_response)
+            
+            # Ask if they want to use this content
+            use_raw = input(f"{Fore.YELLOW}Do you want to use this raw response as the file content? (y/n): {Style.RESET_ALL}").lower()
+            if use_raw in ('y', 'yes'):
+                file_content = cleaned_response
     
-    # Final cleanup for raw response
-    if response.startswith("```"):
-        if "\n" in response:
-            response = response.split("\n", 1)[1]
-        else:
-            response = response[3:].strip()
-    if response.endswith("```"):
-        response = response[:-3].strip()
-    
-    return response
+    return file_content
 
 
 def extract_suggested_command(response):
@@ -520,8 +598,7 @@ def extract_suggested_command(response):
             return line
     
     # If all else fails, return the raw response with a warning
-    print(f"{Fore.YELLOW}Warning: Could not identify a command in the response.{Style.RESET_ALL}")
-    return None
+    return response.strip()
 
 
 def main():
@@ -663,19 +740,21 @@ def handle_edit_query(user_input, conversation_history):
         return
     
     # Construct prompt for the LLM
-    prompt = f"User wants to {clean_instruction} in file {file_path}.\n\n"
-    prompt += f"Current content of {file_path}:\n"
+    prompt = f"I need you to edit a file named {file_path}.\n\n"
+    prompt += f"The edit request is: {clean_instruction}\n\n"
+    prompt += f"Here is the current content of {file_path}:\n"
     prompt += original_content + "\n\n"
-    prompt += f"Please provide the modified content of {file_path} after making the required changes.\n"
-    prompt += f"Format your response as:\nModified {file_path}:\n[entire file content with changes]\n"
-    prompt += "IMPORTANT FORMATTING INSTRUCTIONS:\n"
-    prompt += "1. ONLY include the modified file content, NOT explanations or comments about what you changed.\n"
-    prompt += "2. DO NOT include code blocks with triple backticks (```) at the start or end of the content.\n"
-    prompt += "3. DO NOT include examples, other files, or any content from the conversation history.\n"
-    prompt += "4. DO NOT include any markdown formatting in your response.\n"
-    prompt += "5. Return ONLY the raw file content exactly as it should be saved.\n"
-    prompt += "6. If asked to add blank lines, whitespace, or other formatting changes, implement them literally without adding comments about them.\n"
-    prompt += "7. DO NOT add explanatory comments to the code unless explicitly asked to do so."
+    
+    prompt += "RESPONSE FORMAT REQUIREMENTS:\n"
+    prompt += "1. Return ONLY the complete modified file content, exactly as it should be saved\n"
+    prompt += "2. Include the ENTIRE file content with your changes applied\n"
+    prompt += "3. DO NOT use markdown formatting or code blocks\n"
+    prompt += "4. DO NOT include any explanation or discussion of the changes\n"
+    prompt += "5. DO NOT include markers like 'Modified file:' or 'Updated content:'\n"
+    prompt += "6. Preserve the exact indentation and formatting of any code you're not changing\n"
+    prompt += "7. For adding empty lines, just add the actual blank lines, don't add comments about them\n"
+    prompt += "8. Respond with ONLY the content that should replace the file\n"
+    prompt += "9. For small edits, change only what's necessary - don't reformat or restructure the entire file"
     
     # Add the edit request to conversation history
     conversation_history.append({"role": "user", "content": prompt})
@@ -689,7 +768,7 @@ def handle_edit_query(user_input, conversation_history):
     # Extract the modified content
     modified_content = extract_modified_content(assistant_response, file_path)
     
-    # If we couldn't extract the content or user chose not to use raw content
+    # If we couldn't extract the content
     if modified_content is None:
         print(f"{Fore.RED}Edit canceled. No changes made to {file_path}{Style.RESET_ALL}")
         return
@@ -702,7 +781,8 @@ def handle_edit_query(user_input, conversation_history):
         
         # Ask for confirmation
         confirm = input(f"\n{Fore.YELLOW}Do you want to save these changes? (y/n): {Style.RESET_ALL}").lower()
-        if confirm == 'y' or confirm == 'yes':
+        if confirm in ('y', 'yes'):
+            # Write the content in a way that preserves the original encoding
             if write_file_content(file_path, modified_content):
                 print(f"{Fore.GREEN}Changes saved to {file_path}{Style.RESET_ALL}")
                 

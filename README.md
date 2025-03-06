@@ -141,4 +141,12 @@ This tool is designed with privacy in mind:
 - Uses a local LLM through Ollama instead of cloud-based APIs
 - Uses DuckDuckGo for web searches, which doesn't track users
 - All processing happens locally on your machine
-- No data is stored beyond the current session 
+- No data is stored beyond the current session
+
+## Project Structure
+
+- `code_assistant.py`: Main program file
+- `benchmark.py`: Performance benchmarking tool
+- `requirements.txt`: Required Python packages
+- `examples/`: Example files for demonstrating the assistant's capabilities
+- `tests/`: Test suite for the project 
