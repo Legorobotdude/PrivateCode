@@ -25,7 +25,7 @@ init()
 
 # Configuration
 OLLAMA_API_URL = "http://localhost:11434/api/chat"
-DEFAULT_MODEL = "codellama"  # Change to your preferred model
+DEFAULT_MODEL = "qwq"  # Change to your preferred model
 CURRENT_MODEL = DEFAULT_MODEL  # Track the currently selected model
 MAX_SEARCH_RESULTS = 5      # Maximum number of search results to include
 MAX_URL_CONTENT_LENGTH = 10000  # Maximum characters to include from URL content
@@ -483,6 +483,55 @@ def extract_modified_content(response, file_path):
     # First, clean up the raw response - remove any markdown formatting (```), code block indicators, etc.
     cleaned_response = response.strip()
     
+    # Check for responses indicating no changes were made
+    no_changes_phrases = [
+        "I did not make any changes",
+        "I have not made any changes",
+        "No changes were made",
+        "No changes are needed",
+        "I analyzed",
+        "but did not make any changes"
+    ]
+    
+    if any(phrase in cleaned_response.lower() for phrase in no_changes_phrases):
+        print(f"{Fore.YELLOW}Warning: The LLM indicated it did not make any changes, which may be incorrect.{Style.RESET_ALL}")
+        print(f"{Fore.YELLOW}This could be because it misunderstood the request or didn't follow instructions.{Style.RESET_ALL}")
+        show_raw = input(f"{Fore.YELLOW}Do you want to see the raw response? (y/n): {Style.RESET_ALL}").lower()
+        
+        if show_raw in ('y', 'yes'):
+            print("\nRaw response:")
+            print(cleaned_response)
+            return None
+        else:
+            return None
+    
+    # Check for code blocks with triple backticks - this is a common format for code in markdown
+    code_blocks = []
+    if "```" in cleaned_response:
+        # Split by code block markers
+        parts = cleaned_response.split("```")
+        
+        # If we have an odd number of parts, we have complete code blocks
+        if len(parts) > 1:
+            # Extract code blocks (every even-indexed part after the first)
+            for i in range(1, len(parts), 2):
+                if i < len(parts):
+                    # Use lstrip() to only remove leading whitespace, not trailing
+                    code_block = parts[i].lstrip()
+                    # Remove language identifier if present
+                    if code_block and "\n" in code_block:
+                        first_line = code_block.split("\n")[0].strip()
+                        # Check if first line looks like a language identifier (no spaces, no special chars)
+                        if first_line and not any(c in first_line for c in "(){};:,./\\\"'=+-*&^%$#@!~`|<>?"):
+                            # Use lstrip() to only remove leading whitespace, not trailing
+                            code_block = code_block[code_block.find("\n")+1:].lstrip()
+                    code_blocks.append(code_block)
+    
+    # If we found code blocks, use the last one (most likely the final version)
+    if code_blocks:
+        return clean_explanatory_text(code_blocks[-1])
+    
+    # If no code blocks found, proceed with the existing logic
     # If it starts and ends with code blocks, remove them
     if cleaned_response.startswith("```") and "```" in cleaned_response[3:]:
         # Find the first line break after the opening ```
@@ -558,20 +607,8 @@ def extract_modified_content(response, file_path):
             file_content = content
             break
     
-    # Check for explanatory text at the beginning or end and remove it
-    # Common patterns where LLMs start explaining instead of just giving content
-    explanation_starters = [
-        "Here's the modified file:",
-        "Here's the updated file:",
-        "Here's the edited file:",
-        "I've made the following changes:",
-        "I've updated the file as requested:",
-        "The modified file content is:"
-    ]
-    
-    for starter in explanation_starters:
-        if file_content.startswith(starter):
-            file_content = file_content[len(starter):].strip()
+    # Clean up any explanatory text
+    file_content = clean_explanatory_text(file_content)
     
     # Only show the warning if the content is very short or looks like an explanation rather than code
     if len(file_content.strip()) < 10 or file_content.lower().startswith(("i ", "i've ", "here's why", "the reason")):
@@ -592,8 +629,97 @@ def extract_modified_content(response, file_path):
     return file_content
 
 
+def clean_explanatory_text(content):
+    """Clean explanatory text from the content."""
+    if not content:
+        return content
+        
+    # Check for explanatory text at the beginning
+    explanation_starters = [
+        "Here's the modified file:",
+        "Here's the updated file:",
+        "Here's the edited file:",
+        "I've made the following changes:",
+        "I've updated the file as requested:",
+        "The modified file content is:",
+        "Suggested command:",
+        "Command:",
+        "I executed the command",
+    ]
+    
+    for starter in explanation_starters:
+        if content.startswith(starter):
+            # Find the first line break after the starter
+            line_break = content.find("\n", len(starter))
+            if line_break != -1:
+                content = content[line_break+1:].strip()
+    
+    # Check for explanatory text at the end
+    explanation_endings = [
+        "empty line added",
+        "empty lines added",
+        "blank line added",
+        "blank lines added",
+        "new line added",
+        "new lines added",
+        "line added at the end",
+        "lines added at the end",
+        "added at the end of the file",
+        "added to the end of the file",
+    ]
+    
+    lines = content.split('\n')
+    # Check the last few lines for explanatory text
+    for i in range(len(lines)-1, max(len(lines)-4, -1), -1):
+        line = lines[i].lower()
+        if any(ending in line for ending in explanation_endings):
+            # Remove this line
+            lines = lines[:i]
+            break
+    
+    # Remove any "I've added" or similar explanatory text
+    filtered_lines = []
+    for line in lines:
+        # Skip lines that look like explanations
+        if line.strip() and not line.lower().startswith(("i've added", "i added", "added ", "this adds")):
+            filtered_lines.append(line)
+        # But keep empty lines
+        elif not line.strip():
+            filtered_lines.append(line)
+    
+    return '\n'.join(filtered_lines)
+
+
 def extract_suggested_command(response):
     """Extract the suggested command from the LLM's response."""
+    # Check for commands in code blocks
+    if "```" in response:
+        # Split by code block markers
+        parts = response.split("```")
+        
+        # If we have an odd number of parts, we have complete code blocks
+        if len(parts) > 1:
+            # Extract code blocks (every even-indexed part after the first)
+            for i in range(1, len(parts), 2):
+                if i < len(parts):
+                    code_block = parts[i].strip()
+                    # Remove language identifier if present
+                    if code_block and "\n" in code_block:
+                        first_line = code_block.split("\n")[0].strip()
+                        # Check if first line looks like a language identifier
+                        if first_line and not any(c in first_line for c in "(){};:,./\\\"'=+-*&^%$#@!~`|<>?"):
+                            code_block = "\n".join(code_block.split("\n")[1:]).strip()
+                    
+                    # If the code block is a single line, it's likely a command
+                    if code_block and "\n" not in code_block:
+                        return code_block
+                    # If it's multiple lines, take the first non-empty line
+                    elif code_block:
+                        lines = code_block.split("\n")
+                        for line in lines:
+                            if line.strip():
+                                return line.strip()
+    
     # Look for patterns indicating a command suggestion
     patterns = [
         "Suggested command: ",
@@ -787,7 +913,9 @@ def handle_edit_query(user_input, conversation_history):
     prompt += "7. For adding empty lines, just add the actual blank lines, don't add comments about them\n"
     prompt += "8. Respond with ONLY the content that should replace the file\n"
     prompt += "9. For small edits, change only what's necessary - don't reformat or restructure the entire file\n"
-    prompt += "10. DO NOT start your response with phrases like 'Here's the modified file:' - just provide the raw file content"
+    prompt += "10. DO NOT start your response with phrases like 'Here's the modified file:' - just provide the raw file content\n"
+    prompt += "11. DO NOT add explanatory text like 'empty lines added' or 'added at the end of the file'\n"
+    prompt += "12. DO NOT include any commands or suggestions for commands"
     
     # Add the edit request to conversation history
     conversation_history.append({"role": "user", "content": prompt})

@@ -95,6 +95,7 @@ class Benchmarker:
         self.model = model
         self.results = BenchmarkResult()
         self.temp_dir = tempfile.mkdtemp()
+        self.use_real_llm = False
     
     def cleanup(self):
         """Clean up temporary resources."""
@@ -173,20 +174,62 @@ def better_function():
             }
         ]
         
-        for i, test_case in enumerate(test_cases):
-            def _test():
-                result = code_assistant.extract_modified_content(
-                    test_case["response"], 
-                    test_case["file_path"]
+        if not self.use_real_llm:
+            # Use mocked responses for testing extraction logic
+            for i, test_case in enumerate(test_cases):
+                def _test():
+                    result = code_assistant.extract_modified_content(
+                        test_case["response"], 
+                        test_case["file_path"]
+                    )
+                    assert result == test_case["expected"]
+                    return result
+                
+                self._time_execution(
+                    "file_editing", 
+                    test_case["name"],
+                    _test
                 )
-                assert result == test_case["expected"]
-                return result
-            
-            self._time_execution(
-                "file_editing", 
-                test_case["name"],
-                _test
+        else:
+            # Use real LLM calls for file editing tests
+            # Create test files with simple bugs to fix
+            python_file = create_test_file(
+                self.temp_dir,
+                "buggy_function.py",
+                "def hello(name)\n    print('Hello, ' + name)"  # Missing colon after parameter
             )
+            
+            js_file = create_test_file(
+                self.temp_dir,
+                "buggy_js.js",
+                "function add(a, b) {\n    return a + b"  # Missing closing brace and semicolon
+            )
+            
+            # Test Python file fix
+            def _test_python_fix():
+                history = [
+                    {"role": "user", "content": f"Fix this Python code by adding the missing colon after the parameter:\n\n{code_assistant.read_file_content(python_file)}"}
+                ]
+                response = code_assistant.get_ollama_response(history, model=self.model)
+                modified = code_assistant.extract_modified_content(response, python_file)
+                # Check if the colon was added
+                assert "def hello(name):" in modified
+                return modified
+            
+            self._time_execution("file_editing", "Fix Python syntax (real LLM)", _test_python_fix)
+            
+            # Test JavaScript file fix
+            def _test_js_fix():
+                history = [
+                    {"role": "user", "content": f"Fix this JavaScript code by adding the missing closing brace and semicolon:\n\n{code_assistant.read_file_content(js_file)}"}
+                ]
+                response = code_assistant.get_ollama_response(history, model=self.model)
+                modified = code_assistant.extract_modified_content(response, js_file)
+                # Check if the closing brace and semicolon were added
+                assert "return a + b;" in modified and "}" in modified
+                return modified
+            
+            self._time_execution("file_editing", "Fix JavaScript syntax (real LLM)", _test_js_fix)
     
     def _run_code_analysis_tests(self):
         """Run tests for code analysis functionality."""
@@ -203,32 +246,53 @@ def better_function():
             "function getData() {\n    const data = fetchData();\n    return data;\n}\n\n// fetchData is not defined"
         )
         
-        with patch('requests.post') as mock_post:
-            # Test analyzing Python file with zero division error
-            mock_post.return_value = create_mock_ollama_response(
-                "The bug is a division by zero error in line 4. You should add a check to prevent dividing by zero."
-            )
-            
+        if not self.use_real_llm:
+            # Use mocked responses
+            with patch('requests.post') as mock_post:
+                # Test analyzing Python file with zero division error
+                mock_post.return_value = create_mock_ollama_response(
+                    "The bug is a division by zero error in line 4. You should add a check to prevent dividing by zero."
+                )
+                
+                def _test_python():
+                    history = [{"role": "user", "content": f"What's wrong with this code?\n\n{code_assistant.read_file_content(python_file)}"}]
+                    response = code_assistant.get_ollama_response(history, model=self.model)
+                    assert "division by zero" in response.lower()
+                    return response
+                
+                self._time_execution("code_analysis", "Identify division by zero", _test_python)
+                
+                # Test analyzing JavaScript with missing function
+                mock_post.return_value = create_mock_ollama_response(
+                    "The code is trying to call 'fetchData()' but this function is not defined anywhere in the file."
+                )
+                
+                def _test_js():
+                    history = [{"role": "user", "content": f"What's wrong with this code?\n\n{code_assistant.read_file_content(js_file)}"}]
+                    response = code_assistant.get_ollama_response(history, model=self.model)
+                    assert "not defined" in response.lower()
+                    return response
+                
+                self._time_execution("code_analysis", "Identify undefined function", _test_js)
+        else:
+            # Use real LLM calls
             def _test_python():
                 history = [{"role": "user", "content": f"What's wrong with this code?\n\n{code_assistant.read_file_content(python_file)}"}]
                 response = code_assistant.get_ollama_response(history, model=self.model)
-                assert "division by zero" in response.lower()
+                # More flexible assertion for real LLM responses
+                assert any(phrase in response.lower() for phrase in ["division by zero", "divide by zero", "denominator is zero", "zero division"])
                 return response
             
-            self._time_execution("code_analysis", "Identify division by zero", _test_python)
-            
-            # Test analyzing JavaScript with missing function
-            mock_post.return_value = create_mock_ollama_response(
-                "The code is trying to call 'fetchData()' but this function is not defined anywhere in the file."
-            )
+            self._time_execution("code_analysis", "Identify division by zero (real LLM)", _test_python)
             
             def _test_js():
                 history = [{"role": "user", "content": f"What's wrong with this code?\n\n{code_assistant.read_file_content(js_file)}"}]
                 response = code_assistant.get_ollama_response(history, model=self.model)
-                assert "not defined" in response.lower()
+                # More flexible assertion for real LLM responses
+                assert any(phrase in response.lower() for phrase in ["not defined", "undefined", "missing", "doesn't exist"])
                 return response
             
-            self._time_execution("code_analysis", "Identify undefined function", _test_js)
+            self._time_execution("code_analysis", "Identify undefined function (real LLM)", _test_js)
     
     def _run_command_detection_tests(self):
         """Run tests for command detection functionality."""
@@ -339,6 +403,7 @@ def main():
     parser.add_argument("--model", default="codellama", help="The Ollama model to use")
     parser.add_argument("--output", default="benchmark_results.json", help="Output file for results")
     parser.add_argument("--run-tests", action="store_true", help="Run pytest tests before benchmarking")
+    parser.add_argument("--use-real-llm", action="store_true", help="Use real LLM calls instead of mocks")
     args = parser.parse_args()
     
     if args.run_tests:
@@ -348,6 +413,12 @@ def main():
     
     print(f"\nRunning benchmarks with model: {args.model}")
     benchmarker = Benchmarker(model=args.model)
+    
+    # Pass the use_real_llm flag to the benchmarker
+    benchmarker.use_real_llm = args.use_real_llm
+    if args.use_real_llm:
+        print("Using real LLM calls for benchmarks (this may take longer)")
+    
     results = benchmarker.run_benchmarks()
     
     results.save_to_file(args.output)
