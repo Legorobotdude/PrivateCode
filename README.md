@@ -12,6 +12,8 @@ A terminal-based coding assistant that uses local Large Language Models (LLMs) v
 - URL content extraction for reference
 - Intelligent file editing with diff preview
 - Safe command execution with LLM suggestions
+- Create new files with a simple command
+- Create and edit new files in one step
 - Persistent conversation history
 - Locally hosted LLM (no data sent to external services)
 - AI thinking blocks with configurable display options
@@ -98,7 +100,21 @@ A terminal-based coding assistant that uses local Large Language Models (LLMs) v
    ```
    You'll see a diff of proposed changes and be asked to confirm before saving.
 
-7. Run commands by prefixing your query with `run:` or `run `:
+   If the file doesn't exist, you'll be prompted to create it:
+   ```
+   > edit: [new_file.py] to create a hello world function
+   ```
+   This will create the file (and any necessary directories) and then proceed with the edit.
+
+7. Create new empty files by prefixing your query with `create:` or `create `:
+   ```
+   > create: [new_file.py]
+   > create: [src/utils/helper.py]
+   ```
+   You'll be prompted to confirm before creating the file. If the file already exists, 
+   you'll be asked if you want to overwrite it with an empty file.
+
+8. Run commands by prefixing your query with `run:` or `run `:
    ```
    > run: the tests for this project
    > run the tests for this project
@@ -108,30 +124,43 @@ A terminal-based coding assistant that uses local Large Language Models (LLMs) v
    > run: 'python example.py'
    > run 'python example.py'
    ```
+   
+   You can include file context to help the LLM suggest more appropriate commands:
+   ```
+   > run: [main.py] to test this script
+   > run: [test_file.py] [main.py] to run tests on the main file
+   ```
+   
+   You can also specify line ranges to focus on specific parts of files:
+   ```
+   > run: [main.py:50-100] to test this function
+   ```
+   
    All commands require confirmation before execution for safety.
 
-8. Change models by prefixing your query with `model:` or `model `:
+9. Change models by prefixing your query with `model:` or `model `:
    ```
    > model: llama3
    > model codellama
    ```
 
-9. Toggle AI thinking display with special commands:
+10. Toggle AI thinking display with special commands:
    ```
    > thinking:on
    > thinking:off
    > thinking:length 2000
    ```
 
-10. Combine all features as needed:
+11. Combine all features as needed:
    ```
    > search: How to implement better error handling [search_test.py] [https://docs.python.org/3/library/]
    > What's wrong with this function? [buggy.py:25-50]
    > edit: [utils.py:100-150] to optimize the data processing function
    > run: 'python test.py' after looking at [test.py:10-30]
+   > create: [new_module.py]
    ```
 
-11. Type `exit` to quit the application.
+12. Type `exit` to quit the application.
 
 ## Thinking Blocks Feature
 
@@ -269,3 +298,106 @@ This tool is designed with privacy in mind:
 - `examples/`: Example files for demonstrating the assistant's capabilities
 - `tests/`: Test suite for the project
   - `test_thinking_blocks.py`: Tests for the thinking blocks feature 
+
+## File Creation Feature
+
+The File Creation feature allows you to create new empty files with a simple command. This is useful when you want to start a new file from scratch or create placeholder files for a project structure.
+
+### Usage
+
+To create a new file, use the `create:` prefix followed by the file path in square brackets:
+
+```
+> create: [new_file.py]
+```
+
+You'll be prompted to confirm before the file is created:
+
+```
+Create 'new_file.py'? (y/n): y
+Created 'new_file.py'.
+```
+
+If the file already exists, you'll be asked if you want to overwrite it:
+
+```
+File 'existing_file.py' already exists.
+Overwrite with an empty file? (y/n): n
+File creation cancelled for 'existing_file.py'.
+```
+
+You can create files in directories that don't exist yet, and the necessary directories will be created automatically:
+
+```
+> create: [src/utils/helper.py]
+Create 'src/utils/helper.py'? (y/n): y
+Created 'src/utils/helper.py'.
+```
+
+You can also create multiple files at once:
+
+```
+> create: [file1.py] [file2.py]
+```
+
+### Enhanced Edit Functionality
+
+The Edit functionality has been enhanced to handle new files as well. If you try to edit a file that doesn't exist, you'll be prompted to create it:
+
+```
+> edit: [new_file.py] to add a hello world function
+File 'new_file.py' doesn't exist. Create it? (y/n): y
+Created 'new_file.py'.
+```
+
+This allows you to create and edit files in a single step, making it easier to start new files with content.
+
+## Enhanced Run Functionality
+
+The Run functionality has been enhanced to include file context when suggesting commands. This helps the LLM understand what you're trying to do and suggest more appropriate commands.
+
+### Usage
+
+To run a command with file context, include file paths in square brackets:
+
+```
+> run: [main.py] to test this script
+```
+
+The LLM will read the content of the file and suggest a command based on it:
+
+```
+🤖 Assistant:
+Based on the content of main.py, I suggest running the script with Python:
+
+python main.py
+
+This will execute the script and display its output.
+
+Suggested command:
+python main.py
+
+Run this command? (y/n): y
+```
+
+You can include multiple files to provide more context:
+
+```
+> run: [test_file.py] [main.py] to run tests on the main file
+```
+
+You can also specify line ranges to focus on specific parts of files:
+
+```
+> run: [main.py:50-100] to test this function
+```
+
+This is particularly useful when you want to run a specific test or function within a larger file.
+
+### Safety Features
+
+The Run functionality includes several safety measures:
+- Commands are checked against a list of safe prefixes
+- Potentially dangerous commands trigger extra safety warnings with specific reasons
+- All commands require explicit user confirmation before execution
+- Command output is displayed and added to the conversation history

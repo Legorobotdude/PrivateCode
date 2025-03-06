@@ -260,7 +260,12 @@ def get_edit_file_paths(query):
 
 
 def is_safe_command(command):
-    """Check if a command is likely safe to execute."""
+    """
+    Check if a command is likely safe to execute.
+    
+    Returns:
+        tuple: (is_safe, reason) where is_safe is a boolean and reason is a string or None
+    """
     command_lower = command.lower()
     
     # Check for dangerous commands
@@ -1075,6 +1080,29 @@ def handle_edit_query(user_input, conversation_history):
                 files_content_section += f"File: {file_path}{line_info}\nContent:\n{content}\n\n"
             else:
                 files_content_section += f"File: {file_path}\nContent:\n{content}\n\n"
+        elif not os.path.exists(file_path):
+            # File doesn't exist, ask if we should create it
+            confirm = input(f"{Fore.YELLOW}File '{file_path}' doesn't exist. Create it? (y/n): {Style.RESET_ALL}").lower()
+            if confirm == 'y':
+                try:
+                    # Create the directory if it doesn't exist
+                    directory = os.path.dirname(file_path)
+                    if directory and not os.path.exists(directory):
+                        os.makedirs(directory)
+                    
+                    # Create an empty file
+                    Path(file_path).touch()
+                    print(f"{Fore.GREEN}Created '{file_path}'.{Style.RESET_ALL}")
+                    files_content_section += f"File: {file_path}\nContent:\n[New empty file]\n\n"
+                    
+                    # Add the file creation to conversation history
+                    conversation_history.append({"role": "system", "content": f"Created file '{file_path}'."})
+                except Exception as e:
+                    print(f"{Fore.RED}Error creating '{file_path}': {e}{Style.RESET_ALL}")
+                    return
+            else:
+                print(f"{Fore.YELLOW}Edit cancelled for '{file_path}'.{Style.RESET_ALL}")
+                return
     
     # Construct user message
     user_message = f"Edit Request: {clean_query}"
@@ -1114,9 +1142,9 @@ def handle_edit_query(user_input, conversation_history):
                 print(f"\n{Fore.YELLOW}Proposed changes to {file_path}:{Style.RESET_ALL}")
                 
                 # Get the original content for comparison
-                original_content = read_file_content(file_path, None, None)  # Always read the entire file for editing
+                original_content = read_file_content(file_path, None, None) or ""  # Use empty string for new files
                 
-                if original_content and original_content != modified_content:
+                if original_content != modified_content:
                     # Generate and display a colored diff
                     diff = generate_colored_diff(original_content, modified_content, file_path)
                     print(diff)
@@ -1139,10 +1167,33 @@ def handle_run_query(user_input, conversation_history):
     # Extract the run query
     run_query = extract_run_query(user_input)
     
+    # Extract file paths from the query
+    clean_query, file_items, _ = extract_file_paths_and_urls(run_query)
+    
     # Construct user message
-    user_message = f"Command Request: {run_query}\n"
+    user_message = f"Command Request: {clean_query}\n"
     user_message += "Please suggest a command to run based on this request. "
     user_message += "Format your response with the command in a code block using triple backticks."
+    
+    # Include file contents if specified
+    if file_items:
+        user_message += "\n\nFiles:\n"
+        for file_item in file_items:
+            # Get the file path
+            if isinstance(file_item, tuple):
+                file_path, start_line, end_line = file_item
+            else:
+                file_path, start_line, end_line = file_item, None, None
+            
+            # Read the file content
+            content = read_file_content(file_path, start_line, end_line)
+            if content:
+                # Include line range info in the file header if specified
+                if start_line is not None or end_line is not None:
+                    line_info = f" (lines {start_line or '1'}-{end_line or 'end'})"
+                    user_message += f"File: {file_path}{line_info}\nContent:\n{content}\n\n"
+                else:
+                    user_message += f"File: {file_path}\nContent:\n{content}\n\n"
     
     # Add the user message to the conversation history
     conversation_history.append({"role": "user", "content": user_message})
@@ -1171,9 +1222,10 @@ def handle_run_query(user_input, conversation_history):
             return
         
         # Check if the command is safe
-        if not is_safe_command(suggested_command):
+        is_safe, reason = is_safe_command(suggested_command)
+        if not is_safe:
             print(f"{Fore.RED}Warning: The suggested command may be unsafe: {suggested_command}{Style.RESET_ALL}")
-            print(f"{Fore.RED}This command contains potentially dangerous operations.{Style.RESET_ALL}")
+            print(f"{Fore.RED}Reason: {reason}{Style.RESET_ALL}")
             confirm = input(f"{Fore.YELLOW}Are you sure you want to run this command? (y/n): {Style.RESET_ALL}").lower()
             if confirm not in ('y', 'yes'):
                 print(f"{Fore.YELLOW}Command execution cancelled.{Style.RESET_ALL}")
