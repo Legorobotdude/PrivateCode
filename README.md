@@ -7,6 +7,7 @@ A terminal-based coding assistant that uses local Large Language Models (LLMs) v
 - Interactive terminal interface
 - Context-aware coding assistance
 - File inclusion for code context
+- Partial file reading with line range specification
 - Web search capabilities with DuckDuckGo
 - URL content extraction for reference
 - Intelligent file editing with diff preview
@@ -65,6 +66,15 @@ A terminal-based coding assistant that uses local Large Language Models (LLMs) v
    > How can I improve these two files? [file1.py] [file2.py]
    ```
 
+   You can specify line ranges to read only parts of a file:
+   ```
+   > What does this function do? [code_assistant.py:100-150]
+   > Check lines 20-30 of [example.py:20-30]
+   > Show me from line 50 onwards [file.py:50-]
+   > Show me up to line 25 [file.py:-25]
+   > What's on line 42? [file.py:42]
+   ```
+
 3. Use web search by prefixing your query with `search:` or `search `:
    ```
    > search: Python requests library documentation
@@ -116,6 +126,9 @@ A terminal-based coding assistant that uses local Large Language Models (LLMs) v
 10. Combine all features as needed:
    ```
    > search: How to implement better error handling [search_test.py] [https://docs.python.org/3/library/]
+   > What's wrong with this function? [buggy.py:25-50]
+   > edit: [utils.py:100-150] to optimize the data processing function
+   > run: 'python test.py' after looking at [test.py:10-30]
    ```
 
 11. Type `exit` to quit the application.
@@ -158,6 +171,55 @@ It's commonly used in combinatorics, probability theory, and many other areas of
 Thinking display is now OFF
 ```
 
+## Partial File Reading Feature
+
+The Partial File Reading feature allows you to specify line ranges when including files in your queries. This helps focus the AI's attention on specific parts of a file, which is particularly useful for large files or when you only need help with a specific function or section.
+
+### Line Range Syntax
+
+You can specify line ranges using the following syntax in square brackets:
+
+- `[filename:start-end]` - Read lines from `start` to `end` (inclusive)
+- `[filename:start-]` - Read lines from `start` to the end of the file
+- `[filename:-end]` - Read lines from the beginning of the file to `end`
+- `[filename:line]` - Read just the specified line
+
+Line numbers are 1-indexed (the first line is line 1).
+
+### Example Usage
+
+```
+> What does this function do? [code_assistant.py:100-150]
+```
+This reads only lines 100-150 of code_assistant.py and asks the AI about the function in that range.
+
+```
+> Check for bugs in the calculate_average function [math_utils.py:75-100]
+```
+This focuses the AI on just the calculate_average function in lines 75-100.
+
+```
+> Show me from line 50 onwards [file.py:50-]
+```
+This reads the file from line 50 to the end.
+
+```
+> Show me up to line 25 [file.py:-25]
+```
+This reads the file from the beginning to line 25.
+
+```
+> What's on line 42? [file.py:42]
+```
+This reads just line 42 of the file.
+
+### Benefits
+
+- **Reduced Token Usage**: By including only relevant parts of files, you use fewer tokens in the context window.
+- **Focused Responses**: The AI can focus on specific sections without being distracted by irrelevant code.
+- **Better Performance**: Processing smaller chunks of code can lead to more accurate and faster responses.
+- **Easier Debugging**: You can target specific functions or code blocks that need attention.
+
 ## Safety Features
 
 The assistant includes several safety measures:
@@ -189,6 +251,7 @@ You can modify the default settings in the `code_assistant.py` file:
 - URL content is filtered to extract useful text and truncated if too long.
 - Command suggestions are based on your description and the files in your directory.
 - Thinking blocks are hidden by default but can be shown with the `thinking:on` command.
+- Partial file reading allows you to focus the LLM on specific parts of a file, which can help reduce token usage and get more targeted responses.
 
 ## Privacy Considerations
 

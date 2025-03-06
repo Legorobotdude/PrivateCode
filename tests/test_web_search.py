@@ -76,7 +76,8 @@ class TestWebSearch:
         query = "Check the file [app.py]"
         clean_query, file_paths, urls = code_assistant.extract_file_paths_and_urls(query)
         assert "Check the file" in clean_query
-        assert "app.py" in file_paths
+        assert len(file_paths) == 1
+        assert file_paths[0][0] == "app.py"  # First element of the tuple is the file path
         assert len(urls) == 0
         
         # Test with a single URL in brackets
@@ -89,7 +90,7 @@ class TestWebSearch:
         # Test with both in brackets
         query = "Look at [file.py] and [https://example.com]"
         clean_query, file_paths, urls = code_assistant.extract_file_paths_and_urls(query)
-        assert "Look at" in clean_query
-        assert "and" in clean_query
-        assert "file.py" in file_paths
+        assert "Look at  and" in clean_query
+        assert len(file_paths) == 1
+        assert file_paths[0][0] == "file.py"  # First element of the tuple is the file path
         assert "https://example.com" in urls 

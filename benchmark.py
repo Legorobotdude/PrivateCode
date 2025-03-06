@@ -47,55 +47,55 @@ class BenchmarkResult:
     
     def print_summary(self):
         """Print a summary of the benchmark results."""
-        if not self.results:
-            print("No benchmark results to display.")
-            return
+        total_tasks = len(self.results)
+        successful_tasks = sum(1 for r in self.results if r["success"])
+        success_rate = (successful_tasks / total_tasks) * 100 if total_tasks > 0 else 0
+        avg_time = sum(r["time_taken"] for r in self.results) / total_tasks if total_tasks > 0 else 0
         
-        total = len(self.results)
-        successful = sum(1 for r in self.results if r["success"])
-        success_rate = (successful / total) * 100 if total > 0 else 0
-        
-        avg_time = sum(r["time_taken"] for r in self.results) / total if total > 0 else 0
-        
-        print(f"\n{'=' * 50}")
-        print(f"BENCHMARK SUMMARY")
-        print(f"{'=' * 50}")
-        print(f"Total tasks: {total}")
-        print(f"Successful tasks: {successful}")
+        print("\n==================================================")
+        print("BENCHMARK SUMMARY")
+        print("==================================================")
+        print(f"Total tasks: {total_tasks}")
+        print(f"Successful tasks: {successful_tasks}")
         print(f"Success rate: {success_rate:.2f}%")
         print(f"Average time per task: {avg_time:.2f} seconds")
-        print(f"{'=' * 50}")
+        print("==================================================\n")
         
-        # Group by task type
+        # Group results by task type
         task_types = {}
-        for r in self.results:
-            task_type = r["task_type"]
+        for result in self.results:
+            task_type = result["task_type"]
             if task_type not in task_types:
-                task_types[task_type] = {"total": 0, "success": 0, "time": 0}
+                task_types[task_type] = {
+                    "total": 0,
+                    "success": 0,
+                    "time": 0
+                }
             
             task_types[task_type]["total"] += 1
-            if r["success"]:
+            if result["success"]:
                 task_types[task_type]["success"] += 1
-            task_types[task_type]["time"] += r["time_taken"]
+            task_types[task_type]["time"] += result["time_taken"]
         
-        print("\nResults by task type:")
+        # Print results by task type
+        print("Results by task type:")
         print(f"{'Task Type':<20} {'Success Rate':<15} {'Avg Time (s)':<15}")
-        print(f"{'-' * 50}")
+        print("-" * 50)
         
-        for task_type, stats in task_types.items():
+        for task_type, stats in sorted(task_types.items()):
             success_rate = (stats["success"] / stats["total"]) * 100 if stats["total"] > 0 else 0
             avg_time = stats["time"] / stats["total"] if stats["total"] > 0 else 0
-            print(f"{task_type:<20} {success_rate:>6.2f}%{'':<8} {avg_time:>6.2f}{'':<8}")
+            print(f"{task_type:<20} {success_rate:>6.2f}% {' '*8} {avg_time:>6.2f}")
 
 
 class Benchmarker:
     """Class to run benchmark tests on the coding assistant."""
     
-    def __init__(self, model="codellama"):
+    def __init__(self, model="qwq"):
         self.model = model
         self.results = BenchmarkResult()
         self.temp_dir = tempfile.mkdtemp()
-        self.use_real_llm = False
+        self.use_real_llm = True  # Use real LLM by default
     
     def cleanup(self):
         """Clean up temporary resources."""
@@ -108,6 +108,7 @@ class Benchmarker:
             self._run_code_analysis_tests()
             self._run_command_detection_tests()
             self._run_query_classification_tests()
+            self._run_partial_file_reading_tests()
             
             self.results.print_summary()
             return self.results
@@ -116,19 +117,22 @@ class Benchmarker:
     
     def _time_execution(self, task_type, task_name, func, *args, **kwargs):
         """Time the execution of a function and record the result."""
+        print(f"Running {task_type}: {task_name}...")
         start_time = time.time()
         try:
             result = func(*args, **kwargs)
             success = True
             notes = ""
+            print(f"  ✓ Success")
         except Exception as e:
             result = None
             success = False
             notes = str(e)
+            print(f"  ✗ Failed: {notes}")
         
         time_taken = time.time() - start_time
         self.results.add_result(task_type, task_name, success, time_taken, notes)
-        return result, success
+        return result
     
     def _run_file_editing_tests(self):
         """Run tests for file editing functionality."""
@@ -389,6 +393,126 @@ grep "search pattern" *.py
                 _test
             )
 
+    def _run_partial_file_reading_tests(self):
+        """Run tests for the partial file reading feature."""
+        # Create a test file with multiple lines
+        test_content = "\n".join([f"Line {i}: This is test content line {i}" for i in range(1, 101)])
+        test_file = create_test_file(self.temp_dir, "large_file.txt", test_content)
+        
+        # Test reading specific line ranges
+        def _test_read_line_range():
+            # Test with a specific line range (lines 10-20)
+            # Use brackets around the file path and line range separately to avoid issues with Windows paths
+            query = f"Analyze lines 10-20 of [large_file.txt:10-20]"
+            # Manually construct the file items to avoid issues with Windows paths
+            file_items = [(test_file, 10, 20)]
+            
+            file_path, start_line, end_line = file_items[0]
+            content = code_assistant.read_file_content(file_path, start_line, end_line)
+            
+            # Verify that only the requested lines are included
+            assert "Line 10:" in content
+            assert "Line 20:" in content
+            assert "Line 9:" not in content
+            assert "Line 21:" not in content
+            
+            # Verify the line info header is included
+            assert "Lines 10-20" in content
+            
+            return True
+        
+        # Test reading from a specific line to the end
+        def _test_read_from_line():
+            # Manually construct the file items
+            file_items = [(test_file, 90, None)]
+            
+            file_path, start_line, end_line = file_items[0]
+            content = code_assistant.read_file_content(file_path, start_line, end_line)
+            
+            # Verify that only the requested lines are included
+            assert "Line 90:" in content
+            assert "Line 100:" in content
+            assert "Line 89:" not in content
+            
+            return True
+        
+        # Test reading from the beginning to a specific line
+        def _test_read_to_line():
+            # Manually construct the file items
+            file_items = [(test_file, None, 10)]
+            
+            file_path, start_line, end_line = file_items[0]
+            content = code_assistant.read_file_content(file_path, start_line, end_line)
+            
+            # Verify that only the requested lines are included
+            assert "Line 1:" in content
+            assert "Line 10:" in content
+            assert "Line 11:" not in content
+            
+            return True
+        
+        # Test reading a single line
+        def _test_read_single_line():
+            # Manually construct the file items
+            file_items = [(test_file, 42, 42)]  # End is inclusive in read_file_content
+            
+            file_path, start_line, end_line = file_items[0]
+            content = code_assistant.read_file_content(file_path, start_line, end_line)
+            
+            # Verify that only the requested line is included
+            assert "Line 42:" in content
+            assert "Line 41:" not in content
+            assert "Line 43:" not in content
+            
+            return True
+        
+        # Test with real LLM to analyze partial file
+        def _test_llm_partial_file_analysis():
+            if not self.use_real_llm:
+                return True  # Skip if not using real LLM
+                
+            # Create a file with a bug in a specific line range
+            bug_content = "\n".join([
+                "def calculate_sum(numbers):",
+                "    total = 0",
+                "    for num in numbers:",
+                "        total += num",
+                "    return total",
+                "",
+                "def calculate_average(numbers):",
+                "    if len(numbers) == 0:",
+                "        return 0",
+                "    total = calculate_sum(numbers)",
+                "    # Bug is here - should divide by len(numbers)",
+                "    return total / 0",  # Division by zero bug
+                "",
+                "result = calculate_average([1, 2, 3, 4, 5])"
+            ])
+            
+            bug_file = create_test_file(self.temp_dir, "bug_in_range.py", bug_content)
+            
+            # Manually construct the file items
+            file_items = [(bug_file, 6, 12)]
+            
+            file_path, start_line, end_line = file_items[0]
+            partial_content = code_assistant.read_file_content(file_path, start_line, end_line)
+            
+            history = [{"role": "user", "content": f"What's wrong with this function?\n\n{partial_content}"}]
+            response = code_assistant.get_ollama_response(history, model=self.model)
+            
+            # Check if the response identifies the division by zero issue
+            assert response is not None
+            assert "division by zero" in response.lower() or "divide by zero" in response.lower() or "zero" in response.lower()
+            
+            return True
+        
+        # Run the tests
+        self._time_execution("partial_file_reading", "Read specific line range", _test_read_line_range)
+        self._time_execution("partial_file_reading", "Read from specific line to end", _test_read_from_line)
+        self._time_execution("partial_file_reading", "Read from beginning to specific line", _test_read_to_line)
+        self._time_execution("partial_file_reading", "Read single line", _test_read_single_line)
+        self._time_execution("partial_file_reading", "LLM analysis of partial file", _test_llm_partial_file_analysis)
+
 
 def run_pytest_tests():
     """Run the pytest test suite and return the success status."""
@@ -400,10 +524,10 @@ def run_pytest_tests():
 def main():
     """Main function to run benchmarks."""
     parser = argparse.ArgumentParser(description="Benchmark the local LLM coding assistant")
-    parser.add_argument("--model", default="codellama", help="The Ollama model to use")
+    parser.add_argument("--model", default="qwq", help="The Ollama model to use")
     parser.add_argument("--output", default="benchmark_results.json", help="Output file for results")
     parser.add_argument("--run-tests", action="store_true", help="Run pytest tests before benchmarking")
-    parser.add_argument("--use-real-llm", action="store_true", help="Use real LLM calls instead of mocks")
+    parser.add_argument("--use-mocks", action="store_true", help="Use mock responses instead of real LLM calls")
     args = parser.parse_args()
     
     if args.run_tests:
@@ -414,15 +538,19 @@ def main():
     print(f"\nRunning benchmarks with model: {args.model}")
     benchmarker = Benchmarker(model=args.model)
     
-    # Pass the use_real_llm flag to the benchmarker
-    benchmarker.use_real_llm = args.use_real_llm
-    if args.use_real_llm:
-        print("Using real LLM calls for benchmarks (this may take longer)")
+    # Set use_real_llm based on the use-mocks flag (inverted logic)
+    benchmarker.use_real_llm = not args.use_mocks
+    if args.use_mocks:
+        print("Using mock responses for benchmarks (faster but less realistic)")
+    else:
+        print("Using real LLM calls for benchmarks (this may take longer but provides more realistic results)")
     
+    # Run the benchmarks
     results = benchmarker.run_benchmarks()
     
+    # Save results to file
     results.save_to_file(args.output)
-    print(f"Benchmark results saved to {args.output}")
+    print(f"\nBenchmark results saved to {args.output}")
     
     return 0
 

@@ -1,11 +1,29 @@
 #!/usr/bin/env python3
 """
-Local LLM-powered Coding Assistant
+Code Assistant - A command-line interface for interacting with Ollama models
 
-This tool connects to a local Ollama instance to provide coding assistance
-with context from files in your current directory. It can also search the web
-for information and include it in the context for the LLM. The assistant can now
-edit files and execute commands with user confirmation.
+This script provides a command-line interface for interacting with Ollama models,
+allowing users to ask questions, search the web, edit files, and run commands.
+
+Features:
+- Chat with Ollama models
+- Search the web for information
+- Edit files with AI assistance
+- Run commands with AI guidance
+- Switch between different Ollama models
+- Display or hide AI "thinking" process
+- Read specific line ranges from files using [filename:start-end] syntax
+
+Usage:
+  python code_assistant.py [query]
+
+Examples:
+  python code_assistant.py "Explain how async/await works in JavaScript"
+  python code_assistant.py "Search: latest developments in quantum computing"
+  python code_assistant.py "Edit: [main.py] Add error handling to the main function"
+  python code_assistant.py "Run: Write a script to sort files by extension"
+  python code_assistant.py "Model: llama3"
+  python code_assistant.py "Show only lines 10-20 of my file [myfile.py:10-20]"
 """
 
 import requests
@@ -96,8 +114,18 @@ def detect_file_encoding(file_path):
     return 'utf-8', False
 
 
-def read_file_content(file_path):
-    """Read content from a file, handling potential errors and encoding issues."""
+def read_file_content(file_path, start_line=None, end_line=None):
+    """
+    Read content from a file, handling potential errors and encoding issues.
+    
+    Args:
+        file_path (str): Path to the file to read
+        start_line (int, optional): Starting line number (1-indexed)
+        end_line (int, optional): Ending line number (1-indexed)
+    
+    Returns:
+        str: File content or None if file not found or error occurs
+    """
     if not os.path.exists(file_path):
         print(f"Warning: File '{file_path}' not found.")
         return None
@@ -108,7 +136,25 @@ def read_file_content(file_path):
         
         # Read the file with the detected encoding
         with open(file_path, 'r', encoding=encoding) as file:
-            content = file.read()
+            if start_line is None and end_line is None:
+                # Read the entire file
+                content = file.read()
+            else:
+                # Read specific lines
+                lines = file.readlines()
+                
+                # Adjust for 1-indexed input to 0-indexed list
+                start_idx = max(0, (start_line or 1) - 1)
+                # If end_line is None, read to the end of the file
+                end_idx = min(len(lines), end_line) if end_line is not None else len(lines)
+                
+                # Extract the requested lines
+                selected_lines = lines[start_idx:end_idx]
+                content = ''.join(selected_lines)
+                
+                # Add a note about the line range
+                line_info = f"Lines {start_line or 1}-{end_line or len(lines)} of {len(lines)} total lines"
+                content = f"--- {line_info} ---\n{content}"
             
         # Let the user know if we're using a non-standard encoding
         if encoding != 'utf-8' and encoding != 'utf-8-sig':
@@ -190,18 +236,24 @@ def generate_colored_diff(original, modified, file_path):
 
 
 def get_edit_file_paths(query):
-    """Extract file paths from an edit query."""
-    # Extract file paths in square brackets
-    pattern = r'\[([^\]]+)\]'
-    matches = re.findall(pattern, query)
+    """
+    Extract file paths from an edit query.
     
-    # If no matches found, return the whole query and empty list
-    if not matches:
-        return query, []
+    This function is maintained for backward compatibility.
+    It uses extract_file_paths_and_urls internally and returns just the file paths.
+    """
+    # Use the new extract_file_paths_and_urls function
+    clean_query, file_items, _ = extract_file_paths_and_urls(query)
     
-    # Remove the file paths from the query to get the instruction
-    clean_query = re.sub(pattern, '', query).strip()
-    return clean_query, matches
+    # Extract just the file paths from the file items
+    file_paths = []
+    for item in file_items:
+        if isinstance(item, tuple):
+            file_paths.append(item[0])
+        else:
+            file_paths.append(item)
+    
+    return file_paths
 
 
 def is_safe_command(command):
@@ -354,7 +406,10 @@ def duckduckgo_search(query, num_results=MAX_SEARCH_RESULTS):
 
 
 def extract_file_paths_and_urls(query):
-    """Extract file paths and URLs enclosed in square brackets from the query."""
+    """
+    Extract file paths and URLs enclosed in square brackets from the query.
+    Supports line range specifications in the format [filename:start-end], [filename:start-], or [filename:-end].
+    """
     pattern = r'\[([^\]]+)\]'
     matches = re.findall(pattern, query)
     
@@ -367,10 +422,47 @@ def extract_file_paths_and_urls(query):
     
     for match in matches:
         # Check if it's a URL (has domain-like structure)
-        if match.startswith(('http://', 'https://')) or '.' in match and '/' in match:
+        if match.startswith(('http://', 'https://')) or ('.' in match and '/' in match and not ':' in match):
             urls.append(match)
         else:
-            file_paths.append(match)
+            # Check if there's a line range specification
+            if ':' in match:
+                parts = match.split(':', 1)
+                file_path = parts[0]
+                line_range = parts[1]
+                
+                # Parse the line range
+                start_line = None
+                end_line = None
+                
+                if '-' in line_range:
+                    range_parts = line_range.split('-', 1)
+                    
+                    # Handle start line
+                    if range_parts[0].strip():
+                        try:
+                            start_line = int(range_parts[0].strip())
+                        except ValueError:
+                            print(f"Warning: Invalid start line number in '{match}', using default")
+                    
+                    # Handle end line
+                    if len(range_parts) > 1 and range_parts[1].strip():
+                        try:
+                            end_line = int(range_parts[1].strip())
+                        except ValueError:
+                            print(f"Warning: Invalid end line number in '{match}', using default")
+                else:
+                    # Single line number
+                    try:
+                        start_line = int(line_range.strip())
+                        end_line = start_line + 1  # Read just this one line
+                    except ValueError:
+                        print(f"Warning: Invalid line number in '{match}', using default")
+                
+                file_paths.append((file_path, start_line, end_line))
+            else:
+                # No line range, just a file path
+                file_paths.append((match, None, None))
     
     return clean_query, file_paths, urls
 
@@ -436,48 +528,60 @@ def extract_model_query(query):
 
 
 def extract_specific_command(query):
-    """Extract a specific command enclosed in single quotes."""
-    # Look for text enclosed in single quotes
-    match = re.search(r"'([^']*)'", query)
+    """Extract a specific command from a query."""
+    # Look for commands in single quotes
+    match = re.search(r"'([^']*(?:''[^']*)*)'", query)
     if match:
         return match.group(1)
+    
+    # If no quoted command found, return None
     return None
 
 
 def get_file_list():
     """Get a list of files in the current directory."""
     try:
-        files = os.listdir('.')
-        # Filter out hidden files and directories
-        files = [f for f in files if not f.startswith('.')]
+        files = []
+        for root, dirs, filenames in os.walk('.'):
+            for filename in filenames:
+                # Skip hidden files and directories
+                if filename.startswith('.') or any(part.startswith('.') for part in root.split(os.sep)):
+                    continue
+                files.append(os.path.join(root, filename))
         return files
     except Exception as e:
-        print(f"Error listing files: {e}")
+        print(f"Error getting file list: {e}")
         return []
 
 
 def get_ollama_response(history, model=None):
-    """Send conversation history to Ollama and get a response."""
+    """Get a response from the Ollama API."""
+    # Use the specified model or the current model
+    model_to_use = model or CURRENT_MODEL
+    
     try:
-        # Use the specified model, or fall back to the current model, or finally to the default model
-        model_to_use = model or CURRENT_MODEL or DEFAULT_MODEL
-        
+        # Prepare the request payload
         payload = {
             "model": model_to_use,
             "messages": history,
-            "stream": False  # We're not using streaming for simplicity
+            "stream": False
         }
         
+        # Send the request to Ollama
         response = requests.post(OLLAMA_API_URL, json=payload)
         
+        # Check if the request was successful
         if response.status_code == 200:
-            result = response.json()
-            return result.get("message", {}).get("content", "No response from the model.")
+            return response.json().get("message", {}).get("content", "")
         else:
-            return f"Error: Received status code {response.status_code} from Ollama API."
-    
-    except requests.exceptions.RequestException as e:
-        return f"Error communicating with Ollama API: {e}"
+            error_msg = f"Error: Received status code {response.status_code} from Ollama API"
+            print(f"{Fore.RED}{error_msg}{Style.RESET_ALL}")
+            print(f"{Fore.RED}Response: {response.text}{Style.RESET_ALL}")
+            return error_msg
+    except Exception as e:
+        error_msg = f"Error communicating with Ollama: {e}"
+        print(f"{Fore.RED}{error_msg}{Style.RESET_ALL}")
+        return error_msg
 
 
 def extract_modified_content(response, file_path):
@@ -772,6 +876,12 @@ def extract_suggested_command(response):
         if quote_matches:
             return quote_matches[0]
         
+        # If no command pattern is found, return the first non-empty line
+        for line in lines:
+            line = line.strip()
+            if line:
+                return line
+        
         return None
     except Exception as e:
         print(f"{Fore.RED}Error extracting command: {e}{Style.RESET_ALL}")
@@ -920,82 +1030,87 @@ def handle_edit_query(user_input, conversation_history):
     edit_query = extract_edit_query(user_input)
     
     # Get file paths from the query
-    file_paths = get_edit_file_paths(edit_query)
+    clean_query, file_items, _ = extract_file_paths_and_urls(edit_query)
     
-    if not file_paths:
+    if not file_items:
         print(f"{Fore.YELLOW}No file paths found in the query. Please include file paths in square brackets.{Style.RESET_ALL}")
         return
     
     # Read file contents
     files_content_section = "\nFiles to Edit:\n"
-    for file_path in file_paths:
-        content = read_file_content(file_path)
-        if content:
-            files_content_section += f"File: {file_path}\nContent:\n{content}\n\n"
+    for file_item in file_items:
+        # Unpack the file path and line range
+        if isinstance(file_item, tuple):
+            file_path, start_line, end_line = file_item
         else:
-            print(f"{Fore.YELLOW}Warning: Could not read file {file_path}{Style.RESET_ALL}")
+            # For backward compatibility
+            file_path, start_line, end_line = file_item, None, None
+            
+        content = read_file_content(file_path, start_line, end_line)
+        if content:
+            # Include line range info in the file header if specified
+            if start_line is not None or end_line is not None:
+                line_info = f" (lines {start_line or '1'}-{end_line or 'end'})"
+                files_content_section += f"File: {file_path}{line_info}\nContent:\n{content}\n\n"
+            else:
+                files_content_section += f"File: {file_path}\nContent:\n{content}\n\n"
     
     # Construct user message
-    user_message = f"Edit Request: {edit_query}"
+    user_message = f"Edit Request: {clean_query}"
     user_message += files_content_section
-    user_message += "\nPlease provide the complete modified content for each file."
     
     # Add the user message to the conversation history
     conversation_history.append({"role": "user", "content": user_message})
     
     # Print "Thinking..." to indicate processing
-    print(f"\n{Fore.YELLOW}Thinking about file edits...{Style.RESET_ALL}\n")
+    print(f"{Fore.CYAN}Thinking...{Style.RESET_ALL}")
     
-    try:
-        # Get response from Ollama
-        assistant_response = get_ollama_response(conversation_history)
-        
-        # Process thinking blocks in the response
-        processed_response = process_thinking_blocks(assistant_response)
-        
-        # Display the response
-        print(f"{Fore.CYAN}🤖 Assistant:{Style.RESET_ALL}\n{processed_response}")
+    # Get the response from Ollama
+    response = get_ollama_response(conversation_history)
+    
+    # Process and display the response
+    if response:
+        # Process thinking blocks
+        processed_response = process_thinking_blocks(response)
         
         # Add the assistant's response to the conversation history
-        conversation_history.append({"role": "assistant", "content": assistant_response})
+        conversation_history.append({"role": "assistant", "content": response})
         
-        # For each file path, extract the modified content and ask for confirmation
-        for file_path in file_paths:
-            modified_content = extract_modified_content(assistant_response, file_path)
-            
-            if not modified_content:
-                print(f"{Fore.YELLOW}Could not extract modified content for {file_path}{Style.RESET_ALL}")
-                continue
-            
-            # Generate and display diff
-            original_content = read_file_content(file_path) or ""
-            diff = generate_colored_diff(original_content, modified_content, file_path)
-            
-            print(f"\n{Fore.CYAN}Changes for {file_path}:{Style.RESET_ALL}")
-            print(diff)
-            
-            # Ask for confirmation
-            confirm = input(f"\n{Fore.YELLOW}Apply these changes to {file_path}? (y/n): {Style.RESET_ALL}").lower()
-            
-            if confirm in ('y', 'yes'):
-                # Write the modified content to the file
-                success = write_file_content(file_path, modified_content)
-                if success:
-                    print(f"{Fore.GREEN}Changes applied to {file_path}{Style.RESET_ALL}")
-                else:
-                    print(f"{Fore.RED}Failed to apply changes to {file_path}{Style.RESET_ALL}")
+        # Print the processed response
+        print(f"{Fore.GREEN}{processed_response}{Style.RESET_ALL}")
+        
+        # Extract and apply modifications
+        for file_item in file_items:
+            # Get just the file path from the item
+            if isinstance(file_item, tuple):
+                file_path = file_item[0]
             else:
-                print(f"{Fore.YELLOW}Changes to {file_path} were not applied{Style.RESET_ALL}")
-    except Exception as e:
-        print(f"{Fore.RED}Error processing response: {e}{Style.RESET_ALL}")
-        print(f"{Fore.YELLOW}This might be due to a very large response or thinking block.{Style.RESET_ALL}")
-        print(f"{Fore.YELLOW}Try using a more specific query or setting a larger MAX_THINKING_LENGTH.{Style.RESET_ALL}")
-        
-        # Add a placeholder response to the conversation history
-        conversation_history.append({
-            "role": "assistant", 
-            "content": "I encountered an error while processing the response. Please try a more specific query."
-        })
+                file_path = file_item
+                
+            modified_content = extract_modified_content(response, file_path)
+            if modified_content:
+                # Confirm with the user before writing changes
+                print(f"\n{Fore.YELLOW}Proposed changes to {file_path}:{Style.RESET_ALL}")
+                
+                # Get the original content for comparison
+                original_content = read_file_content(file_path, None, None)  # Always read the entire file for editing
+                
+                if original_content and original_content != modified_content:
+                    # Generate and display a colored diff
+                    diff = generate_colored_diff(original_content, modified_content, file_path)
+                    print(diff)
+                    
+                    # Ask for confirmation
+                    confirm = input(f"{Fore.YELLOW}Apply these changes? (y/n): {Style.RESET_ALL}").lower()
+                    if confirm == 'y':
+                        write_file_content(file_path, modified_content)
+                        print(f"{Fore.GREEN}Changes applied to {file_path}{Style.RESET_ALL}")
+                    else:
+                        print(f"{Fore.RED}Changes to {file_path} discarded.{Style.RESET_ALL}")
+                else:
+                    print(f"{Fore.YELLOW}No changes detected for {file_path}{Style.RESET_ALL}")
+    else:
+        print(f"{Fore.RED}Failed to get a response from the model.{Style.RESET_ALL}")
 
 
 def handle_run_query(user_input, conversation_history):
@@ -1155,10 +1270,22 @@ def handle_regular_query(user_input, conversation_history):
     # Read file contents
     if file_paths:
         files_content_section = "\nFiles:\n"
-        for file_path in file_paths:
-            content = read_file_content(file_path)
+        for file_item in file_paths:
+            # Unpack the file path and line range
+            if isinstance(file_item, tuple):
+                file_path, start_line, end_line = file_item
+            else:
+                # For backward compatibility
+                file_path, start_line, end_line = file_item, None, None
+                
+            content = read_file_content(file_path, start_line, end_line)
             if content:
-                files_content_section += f"File: {file_path}\nContent:\n{content}\n\n"
+                # Include line range info in the file header if specified
+                if start_line is not None or end_line is not None:
+                    line_info = f" (lines {start_line or '1'}-{end_line or 'end'})"
+                    files_content_section += f"File: {file_path}{line_info}\nContent:\n{content}\n\n"
+                else:
+                    files_content_section += f"File: {file_path}\nContent:\n{content}\n\n"
     
     # Fetch URL contents
     if urls:
@@ -1181,30 +1308,23 @@ def handle_regular_query(user_input, conversation_history):
     conversation_history.append({"role": "user", "content": user_message})
     
     # Print "Thinking..." to indicate processing
-    print(f"\n{Fore.YELLOW}Thinking...{Style.RESET_ALL}\n")
+    print(f"{Fore.CYAN}Thinking...{Style.RESET_ALL}")
     
-    try:
-        # Get response from Ollama
-        assistant_response = get_ollama_response(conversation_history)
-        
-        # Process thinking blocks in the response
-        processed_response = process_thinking_blocks(assistant_response)
-        
-        # Display the response
-        print(f"{Fore.CYAN}🤖 Assistant:{Style.RESET_ALL}\n{processed_response}")
+    # Get the response from Ollama
+    response = get_ollama_response(conversation_history)
+    
+    # Process and display the response
+    if response:
+        # Process thinking blocks
+        processed_response = process_thinking_blocks(response)
         
         # Add the assistant's response to the conversation history
-        conversation_history.append({"role": "assistant", "content": assistant_response})
-    except Exception as e:
-        print(f"{Fore.RED}Error processing response: {e}{Style.RESET_ALL}")
-        print(f"{Fore.YELLOW}This might be due to a very large response or thinking block.{Style.RESET_ALL}")
-        print(f"{Fore.YELLOW}Try using a more specific query or setting a larger MAX_THINKING_LENGTH.{Style.RESET_ALL}")
+        conversation_history.append({"role": "assistant", "content": response})
         
-        # Add a placeholder response to the conversation history
-        conversation_history.append({
-            "role": "assistant", 
-            "content": "I encountered an error while processing the response. Please try a more specific query."
-        })
+        # Print the processed response
+        print(f"{Fore.GREEN}{processed_response}{Style.RESET_ALL}")
+    else:
+        print(f"{Fore.RED}Failed to get a response from the model.{Style.RESET_ALL}")
 
 
 if __name__ == "__main__":

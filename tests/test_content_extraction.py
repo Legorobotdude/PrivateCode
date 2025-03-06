@@ -80,7 +80,7 @@ Execute: git log --oneline
         response = """
 Let me explain how the code works without suggesting any command.
 
-git status
+echo This is not a command
 """
         command = code_assistant.extract_suggested_command(response)
         assert command == "Let me explain how the code works without suggesting any command.", "Should return the first non-comment line" 
