@@ -26,6 +26,7 @@ init()
 # Configuration
 OLLAMA_API_URL = "http://localhost:11434/api/chat"
 DEFAULT_MODEL = "codellama"  # Change to your preferred model
+CURRENT_MODEL = DEFAULT_MODEL  # Track the currently selected model
 MAX_SEARCH_RESULTS = 5      # Maximum number of search results to include
 MAX_URL_CONTENT_LENGTH = 10000  # Maximum characters to include from URL content
 
@@ -374,55 +375,61 @@ def extract_file_paths_and_urls(query):
 
 def is_search_query(query):
     """Check if the query is a search request."""
-    query = query.lower()
-    return query.startswith('search:') or query.startswith('search ')
+    return query.lower().startswith(("search:", "search "))
 
 
 def is_edit_query(query):
     """Check if the query is a file edit request."""
-    query = query.lower()
-    return query.startswith('edit:') or query.startswith('edit ')
+    return query.lower().startswith(("edit:", "edit "))
 
 
 def is_run_query(query):
     """Check if the query is a command execution request."""
-    query = query.lower()
-    return query.startswith('run:') or query.startswith('run ')
+    return query.lower().startswith(("run:", "run "))
+
+
+def is_model_query(query):
+    """Check if the query is a model change request."""
+    return query.lower().startswith(("model:", "model ", "use model:", "use model "))
 
 
 def extract_search_query(query):
-    """Extract the search term from a search query."""
-    query = query.lower()
-    if query.startswith('search:'):
-        # Remove 'search:' prefix and trim whitespace
+    """Extract the actual search query from the input."""
+    if query.lower().startswith("search:"):
         return query[7:].strip()
-    elif query.startswith('search '):
-        # Remove 'search ' prefix and trim whitespace
+    elif query.lower().startswith("search "):
         return query[7:].strip()
     return query
 
 
 def extract_edit_query(query):
     """Extract the edit instruction from an edit query."""
-    query = query.lower()
-    if query.startswith('edit:'):
-        # Remove 'edit:' prefix and trim whitespace
+    if query.lower().startswith("edit:"):
         return query[5:].strip()
-    elif query.startswith('edit '):
-        # Remove 'edit ' prefix and trim whitespace
+    elif query.lower().startswith("edit "):
         return query[5:].strip()
     return query
 
 
 def extract_run_query(query):
-    """Extract the command or description from a run query."""
-    query = query.lower()
-    if query.startswith('run:'):
-        # Remove 'run:' prefix and trim whitespace
+    """Extract the command from a run query."""
+    if query.lower().startswith("run:"):
         return query[4:].strip()
-    elif query.startswith('run '):
-        # Remove 'run ' prefix and trim whitespace
+    elif query.lower().startswith("run "):
         return query[4:].strip()
+    return query
+
+
+def extract_model_query(query):
+    """Extract the model name from a model query."""
+    if query.lower().startswith("model:"):
+        return query[6:].strip()
+    elif query.lower().startswith("model "):
+        return query[6:].strip()
+    elif query.lower().startswith("use model:"):
+        return query[10:].strip()
+    elif query.lower().startswith("use model "):
+        return query[10:].strip()
     return query
 
 
@@ -447,11 +454,14 @@ def get_file_list():
         return []
 
 
-def get_ollama_response(history, model=DEFAULT_MODEL):
+def get_ollama_response(history, model=None):
     """Send conversation history to Ollama and get a response."""
     try:
+        # Use the specified model, or fall back to the current model, or finally to the default model
+        model_to_use = model or CURRENT_MODEL or DEFAULT_MODEL
+        
         payload = {
-            "model": model,
+            "model": model_to_use,
             "messages": history,
             "stream": False  # We're not using streaming for simplicity
         }
@@ -625,6 +635,7 @@ def main():
     print("For web searches, prefix with 'search:' or 'search ' - Example: search: Python requests library")
     print("For file editing, prefix with 'edit:' or 'edit ' - Example: edit: [main.py] to fix the function")
     print("For running commands, prefix with 'run:' or 'run ' - Example: run: the tests or run: 'python test.py'")
+    print("For changing models, prefix with 'model:' or 'model ' - Example: model: llama3 or model: codellama")
     print("Include URLs in brackets - Example: How to use this API? [https://api.example.com/docs]")
     print()
     print("Type 'exit' to quit.")
@@ -637,6 +648,10 @@ def main():
     
     # Initialize conversation history
     conversation_history = []
+    
+    # Display current model
+    print(f"Current model: {CURRENT_MODEL}")
+    print()
     
     while True:
         # Get user input
@@ -651,6 +666,7 @@ def main():
         search_mode = is_search_query(user_input)
         edit_mode = is_edit_query(user_input)
         run_mode = is_run_query(user_input)
+        model_mode = is_model_query(user_input)
         
         # Handle different query types
         if search_mode:
@@ -659,6 +675,8 @@ def main():
             handle_edit_query(user_input, conversation_history)
         elif run_mode:
             handle_run_query(user_input, conversation_history)
+        elif model_mode:
+            handle_model_query(user_input, conversation_history)
         else:
             handle_regular_query(user_input, conversation_history)
 
@@ -905,6 +923,62 @@ def handle_run_query(user_input, conversation_history):
         "role": "assistant", 
         "content": f"I executed the command: {command}\n\nOutput:\n{output}"
     })
+
+
+def handle_model_query(user_input, conversation_history):
+    """Handle model change requests."""
+    global CURRENT_MODEL
+    
+    # Extract the model instruction
+    model_instruction = extract_model_query(user_input)
+    
+    # Check if this is a specific model (enclosed in quotes)
+    specific_model = extract_specific_command(model_instruction)
+    
+    if specific_model:
+        # User provided a specific model to use
+        model = specific_model
+        print(f"Using specific model: {model}")
+    else:
+        # Use the model instruction directly if it's not empty
+        if model_instruction.strip():
+            model = model_instruction.strip()
+            print(f"Using model: {model}")
+        else:
+            # Get available models from Ollama
+            try:
+                response = requests.get("http://localhost:11434/api/tags")
+                if response.status_code == 200:
+                    models = response.json().get("models", [])
+                    if models:
+                        available_models = [model.get("name") for model in models]
+                        print(f"Available models: {', '.join(available_models)}")
+                        
+                        # Ask user to select a model
+                        print(f"Current model: {CURRENT_MODEL}")
+                        model = input(f"{Fore.YELLOW}Enter the model name to use: {Style.RESET_ALL}")
+                    else:
+                        print(f"{Fore.RED}No models found in Ollama.{Style.RESET_ALL}")
+                        return
+                else:
+                    print(f"{Fore.RED}Error connecting to Ollama: HTTP {response.status_code}{Style.RESET_ALL}")
+                    return
+            except requests.exceptions.RequestException as e:
+                print(f"{Fore.RED}Error communicating with Ollama API: {e}{Style.RESET_ALL}")
+                return
+    
+    # Change the model
+    if model:
+        print(f"{Fore.CYAN}Changing model from {CURRENT_MODEL} to: {model}{Style.RESET_ALL}")
+        CURRENT_MODEL = model
+        
+        # Add the model change to conversation history
+        conversation_history.append({
+            "role": "system", 
+            "content": f"The model has been changed to {model}."
+        })
+    else:
+        print(f"{Fore.YELLOW}Model change canceled. Still using: {CURRENT_MODEL}{Style.RESET_ALL}")
 
 
 def handle_regular_query(user_input, conversation_history):

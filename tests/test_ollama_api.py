@@ -93,10 +93,24 @@ class TestOllamaAPI:
         assert code_assistant.is_run_query("RUN: ls -la")
         assert not code_assistant.is_run_query("How do I run pytest?")
         
+        # Test is_model_query
+        assert code_assistant.is_model_query("model: llama3")
+        assert code_assistant.is_model_query("MODEL: codellama")
+        assert code_assistant.is_model_query("use model: mistral")
+        assert not code_assistant.is_model_query("What model should I use?")
+        
         # Test extract_search_query
         assert code_assistant.extract_search_query("search: python generators") == "python generators"
         assert code_assistant.extract_search_query("Search: how to handle errors") == "how to handle errors"
         
         # Test extract_edit_query
         assert code_assistant.extract_edit_query("edit: app.py to add error handling") == "app.py to add error handling"
-        assert code_assistant.extract_edit_query("Edit: models.py add a new class") == "models.py add a new class" 
+        assert code_assistant.extract_edit_query("Edit: models.py add a new class") == "models.py add a new class"
+        
+        # Test extract_run_query
+        assert code_assistant.extract_run_query("run: python -m pytest") == "python -m pytest"
+        assert code_assistant.extract_run_query("Run: ls -la") == "ls -la"
+        
+        # Test extract_model_query
+        assert code_assistant.extract_model_query("model: llama3") == "llama3"
+        assert code_assistant.extract_model_query("use model: mistral") == "mistral" 
