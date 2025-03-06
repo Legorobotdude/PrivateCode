@@ -512,8 +512,11 @@ def extract_modified_content(response, file_path):
                         cleaned_lines.append(line)
                 cleaned_response = '\n'.join(cleaned_lines)
     
-    # Try to find the actual file content using heuristics
-    # First, look for patterns like "Modified [file]:" or "Updated [file]:"
+    # Since our prompt explicitly tells the LLM not to include markers like "Modified file:",
+    # we should primarily treat the entire response as the file content
+    file_content = cleaned_response
+    
+    # However, we'll still check for common patterns as a fallback
     patterns = [
         f"Modified {file_path}:",
         f"modified {file_path}:",
@@ -524,7 +527,6 @@ def extract_modified_content(response, file_path):
         f"File content for {file_path}:",
     ]
     
-    file_content = None
     for pattern in patterns:
         if pattern in cleaned_response:
             # Split at the pattern and take what follows
@@ -546,13 +548,23 @@ def extract_modified_content(response, file_path):
             file_content = content
             break
     
-    # If we couldn't find a pattern match but the content looks like code
-    # (i.e., not starting with explanation text), use it directly
-    if file_content is None and not cleaned_response.lower().startswith(("here", "the ", "i've", "this")):
-        file_content = cleaned_response
+    # Check for explanatory text at the beginning or end and remove it
+    # Common patterns where LLMs start explaining instead of just giving content
+    explanation_starters = [
+        "Here's the modified file:",
+        "Here's the updated file:",
+        "Here's the edited file:",
+        "I've made the following changes:",
+        "I've updated the file as requested:",
+        "The modified file content is:"
+    ]
     
-    # If we still don't have content, give the user the option to see the raw response
-    if file_content is None:
+    for starter in explanation_starters:
+        if file_content.startswith(starter):
+            file_content = file_content[len(starter):].strip()
+    
+    # Only show the warning if the content is very short or looks like an explanation rather than code
+    if len(file_content.strip()) < 10 or file_content.lower().startswith(("i ", "i've ", "here's why", "the reason")):
         print(f"{Fore.YELLOW}Warning: Could not clearly identify file content in the LLM's response.{Style.RESET_ALL}")
         show_raw = input(f"{Fore.YELLOW}Do you want to see the raw response to manually extract content? (y/n): {Style.RESET_ALL}").lower()
         
@@ -564,6 +576,8 @@ def extract_modified_content(response, file_path):
             use_raw = input(f"{Fore.YELLOW}Do you want to use this raw response as the file content? (y/n): {Style.RESET_ALL}").lower()
             if use_raw in ('y', 'yes'):
                 file_content = cleaned_response
+            else:
+                return None
     
     return file_content
 
@@ -754,7 +768,8 @@ def handle_edit_query(user_input, conversation_history):
     prompt += "6. Preserve the exact indentation and formatting of any code you're not changing\n"
     prompt += "7. For adding empty lines, just add the actual blank lines, don't add comments about them\n"
     prompt += "8. Respond with ONLY the content that should replace the file\n"
-    prompt += "9. For small edits, change only what's necessary - don't reformat or restructure the entire file"
+    prompt += "9. For small edits, change only what's necessary - don't reformat or restructure the entire file\n"
+    prompt += "10. DO NOT start your response with phrases like 'Here's the modified file:' - just provide the raw file content"
     
     # Add the edit request to conversation history
     conversation_history.append({"role": "user", "content": prompt})
