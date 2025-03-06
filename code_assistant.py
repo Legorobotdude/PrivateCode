@@ -29,6 +29,8 @@ DEFAULT_MODEL = "qwq"  # Change to your preferred model
 CURRENT_MODEL = DEFAULT_MODEL  # Track the currently selected model
 MAX_SEARCH_RESULTS = 5      # Maximum number of search results to include
 MAX_URL_CONTENT_LENGTH = 10000  # Maximum characters to include from URL content
+SHOW_THINKING = False  # Default to hiding thinking blocks
+MAX_THINKING_LENGTH = 5000  # Maximum length of thinking block to display
 
 # Command execution safety
 SAFE_COMMAND_PREFIXES = ["python", "python3", "node", "npm", "git", "ls", "dir", "cd", "type", "cat", "make", "dotnet", "gradle", "mvn", "cargo", "rustc", "go", "test", "echo"]
@@ -336,7 +338,7 @@ def duckduckgo_search(query, num_results=MAX_SEARCH_RESULTS):
                 
                 results.append({
                     'title': title,
-                    'description': snippet,
+                    'snippet': snippet,
                     'url': url
                 })
                 
@@ -649,106 +651,131 @@ def clean_explanatory_text(content):
     
     for starter in explanation_starters:
         if content.startswith(starter):
-            # Find the first line break after the starter
-            line_break = content.find("\n", len(starter))
-            if line_break != -1:
-                content = content[line_break+1:].strip()
-    
-    # Check for explanatory text at the end
-    explanation_endings = [
-        "empty line added",
-        "empty lines added",
-        "blank line added",
-        "blank lines added",
-        "new line added",
-        "new lines added",
-        "line added at the end",
-        "lines added at the end",
-        "added at the end of the file",
-        "added to the end of the file",
-    ]
-    
-    lines = content.split('\n')
-    # Check the last few lines for explanatory text
-    for i in range(len(lines)-1, max(len(lines)-4, -1), -1):
-        line = lines[i].lower()
-        if any(ending in line for ending in explanation_endings):
-            # Remove this line
-            lines = lines[:i]
+            content = content[len(starter):].strip()
             break
     
-    # Remove any "I've added" or similar explanatory text
-    filtered_lines = []
-    for line in lines:
-        # Skip lines that look like explanations
-        if line.strip() and not line.lower().startswith(("i've added", "i added", "added ", "this adds")):
-            filtered_lines.append(line)
-        # But keep empty lines
-        elif not line.strip():
-            filtered_lines.append(line)
+    # Remove thinking blocks
+    content = process_thinking_blocks(content)
     
-    return '\n'.join(filtered_lines)
+    return content
+
+
+def process_thinking_blocks(content):
+    """Process thinking blocks in the content.
+    
+    Removes or truncates thinking blocks based on user preferences.
+    """
+    global SHOW_THINKING, MAX_THINKING_LENGTH
+    
+    if not content:
+        return content
+    
+    # Check if there are thinking blocks
+    think_pattern = re.compile(r'<think>(.*?)</think>', re.DOTALL)
+    
+    # First, check if we have any thinking blocks
+    if '<think>' not in content:
+        return content
+    
+    # If thinking is disabled (default), simply remove all thinking blocks
+    if not SHOW_THINKING:
+        # Use regex to remove all thinking blocks
+        return re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL)
+    
+    # If thinking is enabled but needs truncation
+    result = content
+    matches = list(think_pattern.finditer(content))
+    
+    # Process each thinking block
+    for match in reversed(matches):  # Process in reverse to maintain indices
+        thinking_content = match.group(1)
+        start, end = match.span()
+        
+        # Truncate if too long
+        if len(thinking_content) > MAX_THINKING_LENGTH:
+            truncated = thinking_content[:MAX_THINKING_LENGTH] + f"\n... [Thinking truncated, {len(thinking_content) - MAX_THINKING_LENGTH} more characters] ..."
+            result = result[:start] + f"<thinking>\n{truncated}\n</thinking>" + result[end:]
+    
+    return result
+
+
+def toggle_thinking_display():
+    """Toggle whether to show thinking blocks."""
+    global SHOW_THINKING
+    SHOW_THINKING = not SHOW_THINKING
+    status = "ON" if SHOW_THINKING else "OFF"
+    print(f"{Fore.CYAN}Thinking display is now {status}{Style.RESET_ALL}")
+
+
+def set_thinking_max_length(length):
+    """Set the maximum length for displayed thinking blocks."""
+    global MAX_THINKING_LENGTH
+    try:
+        length = int(length)
+        if length < 100:
+            print(f"{Fore.YELLOW}Warning: Setting thinking length too low may not be useful. Using minimum of 100.{Style.RESET_ALL}")
+            length = 100
+        MAX_THINKING_LENGTH = length
+        print(f"{Fore.CYAN}Maximum thinking length set to {MAX_THINKING_LENGTH} characters{Style.RESET_ALL}")
+    except ValueError:
+        print(f"{Fore.RED}Error: Please provide a valid number for thinking length{Style.RESET_ALL}")
 
 
 def extract_suggested_command(response):
     """Extract the suggested command from the LLM's response."""
-    # Check for commands in code blocks
-    if "```" in response:
-        # Split by code block markers
-        parts = response.split("```")
+    if not response:
+        return None
+    
+    try:
+        # First, process any thinking blocks
+        cleaned_response = process_thinking_blocks(response)
         
-        # If we have an odd number of parts, we have complete code blocks
-        if len(parts) > 1:
-            # Extract code blocks (every even-indexed part after the first)
-            for i in range(1, len(parts), 2):
-                if i < len(parts):
-                    code_block = parts[i].strip()
-                    # Remove language identifier if present
-                    if code_block and "\n" in code_block:
-                        first_line = code_block.split("\n")[0].strip()
-                        # Check if first line looks like a language identifier
-                        if first_line and not any(c in first_line for c in "(){};:,./\\\"'=+-*&^%$#@!~`|<>?"):
-                            code_block = "\n".join(code_block.split("\n")[1:]).strip()
-                    
-                    # If the code block is a single line, it's likely a command
-                    if code_block and "\n" not in code_block:
-                        return code_block
-                    # If it's multiple lines, take the first non-empty line
-                    elif code_block:
-                        lines = code_block.split("\n")
-                        for line in lines:
-                            if line.strip():
-                                return line.strip()
-    
-    # Look for patterns indicating a command suggestion
-    patterns = [
-        "Suggested command: ",
-        "Command: ",
-        "Run: ",
-        "Execute: "
-    ]
-    
-    for pattern in patterns:
-        if pattern in response:
-            # Extract the command from the line containing the pattern
-            lines = response.split('\n')
-            for line in lines:
-                if pattern in line:
-                    command = line.split(pattern, 1)[1].strip()
-                    # Remove any trailing punctuation or quotes
-                    command = re.sub(r'["`\']$', '', command)
-                    command = re.sub(r'^["`\']', '', command)
-                    return command
-    
-    # If no pattern matched, extract the first line that looks like a command
-    lines = response.split('\n')
-    for line in lines:
-        line = line.strip()
-        if line and not line.startswith(('#', '//', '/*', '*', '<!--')):
-            return line
-    
-    # If all else fails, return the raw response with a warning
-    return response.strip()
+        # Look for code blocks with triple backticks
+        code_block_pattern = re.compile(r'```(?:bash|shell|cmd|powershell|sh)?\s*(.*?)```', re.DOTALL)
+        code_blocks = code_block_pattern.findall(cleaned_response)
+        
+        if code_blocks:
+            # Use the first code block
+            command = code_blocks[0].strip()
+            # If the command spans multiple lines, use only the first line
+            if '\n' in command:
+                command = command.split('\n')[0].strip()
+            return command
+        
+        # Look for lines that start with common command prefixes
+        lines = cleaned_response.split('\n')
+        for line in lines:
+            line = line.strip()
+            
+            # Check for lines that look like commands
+            if line.startswith(('python ', 'python3 ', 'node ', 'npm ', 'git ', 'ls ', 'dir ', 'cd ')):
+                return line
+            
+            # Check for lines that are explicitly labeled as commands
+            command_prefixes = [
+                "Command: ", 
+                "Suggested command: ",
+                "Run: ",
+                "Execute: ",
+                "Try: ",
+                "Use: "
+            ]
+            
+            for prefix in command_prefixes:
+                if line.startswith(prefix):
+                    return line[len(prefix):].strip()
+        
+        # Look for text between quotes that looks like a command
+        quote_pattern = re.compile(r'[\'"`]((?:python|python3|node|npm|git|ls|dir|cd|grep|find|cat|type|pip|npm|yarn|dotnet|java|javac|gcc|g\+\+|make|cmake|mvn|gradle|cargo|rustc|go|ruby|perl|php|bash|sh|pwsh|powershell|cmd|echo|test|pytest|jest|mocha).*?)[\'"`]')
+        quote_matches = quote_pattern.findall(cleaned_response)
+        
+        if quote_matches:
+            return quote_matches[0]
+        
+        return None
+    except Exception as e:
+        print(f"{Fore.RED}Error extracting command: {e}{Style.RESET_ALL}")
+        return None
 
 
 def main():
@@ -764,7 +791,10 @@ def main():
     print("For changing models, prefix with 'model:' or 'model ' - Example: model: llama3 or model: codellama")
     print("Include URLs in brackets - Example: How to use this API? [https://api.example.com/docs]")
     print()
-    print("Type 'exit' to quit.")
+    print("Special commands:")
+    print("  'thinking:on' or 'thinking:off' - Toggle display of AI thinking blocks")
+    print("  'thinking:length N' - Set maximum length of thinking blocks (N characters)")
+    print("  'exit' - Quit the assistant")
     print()
     
     # Check Ollama connection
@@ -777,6 +807,8 @@ def main():
     
     # Display current model
     print(f"Current model: {CURRENT_MODEL}")
+    print(f"Thinking display: {'ON' if SHOW_THINKING else 'OFF'}")
+    print(f"Maximum thinking length: {MAX_THINKING_LENGTH} characters")
     print()
     
     while True:
@@ -787,6 +819,25 @@ def main():
         if user_input.lower() in ['exit', 'quit']:
             print("Goodbye! 👋")
             break
+            
+        # Check for thinking display commands
+        if user_input.lower() in ['thinking:on', 'thinking on']:
+            toggle_thinking_display()
+            continue
+        elif user_input.lower() in ['thinking:off', 'thinking off']:
+            toggle_thinking_display()
+            continue
+        elif user_input.lower().startswith(('thinking:length ', 'thinking length ')):
+            parts = user_input.split()
+            if len(parts) >= 2:
+                try:
+                    length = int(parts[-1])
+                    set_thinking_max_length(length)
+                except ValueError:
+                    print(f"{Fore.YELLOW}Invalid length value. Please provide a number.{Style.RESET_ALL}")
+            else:
+                print(f"{Fore.YELLOW}Usage: thinking:length NUMBER{Style.RESET_ALL}")
+            continue
         
         # Check query type
         search_mode = is_search_query(user_input)
@@ -808,57 +859,30 @@ def main():
 
 
 def handle_search_query(user_input, conversation_history):
-    """Handle search queries with DuckDuckGo."""
-    # Extract the actual search query
-    user_input = extract_search_query(user_input)
-    print(f"Search mode enabled for: {user_input}")
+    """Handle web search queries."""
+    # Extract the search query
+    search_query = extract_search_query(user_input)
     
-    # Parse the query to extract file paths and URLs
-    clean_query, file_paths, urls = extract_file_paths_and_urls(user_input)
+    print(f"{Fore.CYAN}Searching the web for: {search_query}{Style.RESET_ALL}")
     
-    # Initialize sections for the prompt
-    search_results_section = ""
-    files_content_section = ""
-    url_content_section = ""
+    # Perform the search
+    search_results = duckduckgo_search(search_query)
     
-    # Perform web search
-    search_results = duckduckgo_search(clean_query)
-    
-    if search_results:
-        search_results_section = "\nSearch Results:\n"
-        for i, result in enumerate(search_results, 1):
-            search_results_section += f"{i}. Title: {result['title']}\n"
-            search_results_section += f"   Description: {result['description']}\n"
-            search_results_section += f"   URL: {result['url']}\n\n"
+    if not search_results:
+        print(f"{Fore.YELLOW}No search results found. Proceeding with just the query.{Style.RESET_ALL}")
+        search_content = ""
     else:
-        search_results_section = "\nNo search results found.\n"
-    
-    # Read file contents
-    if file_paths:
-        files_content_section = "\nFiles:\n"
-        for file_path in file_paths:
-            content = read_file_content(file_path)
-            if content:
-                files_content_section += f"File: {file_path}\nContent:\n{content}\n\n"
-    
-    # Fetch URL contents
-    if urls:
-        url_content_section = "\nURL Content:\n"
-        for url in urls:
-            content = fetch_url_content(url)
-            if content:
-                url_content_section += f"URL: {url}\nContent:\n{content}\n\n"
+        # Format search results for the prompt
+        search_content = "\nSearch Results:\n"
+        for i, result in enumerate(search_results, 1):
+            search_content += f"{i}. {result['title']}\n"
+            search_content += f"   URL: {result['url']}\n"
+            search_content += f"   Snippet: {result['snippet']}\n\n"
     
     # Construct user message
-    user_message = f"Query: {clean_query}"
-    
-    # Add search results, file contents, and URL contents if available
-    if search_results_section:
-        user_message += search_results_section
-    if files_content_section:
-        user_message += files_content_section
-    if url_content_section:
-        user_message += url_content_section
+    user_message = f"Web Search Query: {search_query}"
+    if search_content:
+        user_message += f"\n{search_content}"
     
     # Add the user message to the conversation history
     conversation_history.append({"role": "user", "content": user_message})
@@ -866,247 +890,257 @@ def handle_search_query(user_input, conversation_history):
     # Print "Thinking..." to indicate processing
     print(f"\n{Fore.YELLOW}Thinking...{Style.RESET_ALL}\n")
     
-    # Get response from Ollama
-    assistant_response = get_ollama_response(conversation_history)
-    
-    # Display the response
-    print(f"{Fore.CYAN}🤖 Assistant:{Style.RESET_ALL}\n{assistant_response}")
-    
-    # Add the assistant's response to the conversation history
-    conversation_history.append({"role": "assistant", "content": assistant_response})
+    try:
+        # Get response from Ollama
+        assistant_response = get_ollama_response(conversation_history)
+        
+        # Process thinking blocks in the response
+        processed_response = process_thinking_blocks(assistant_response)
+        
+        # Display the response
+        print(f"{Fore.CYAN}🤖 Assistant:{Style.RESET_ALL}\n{processed_response}")
+        
+        # Add the assistant's response to the conversation history
+        conversation_history.append({"role": "assistant", "content": assistant_response})
+    except Exception as e:
+        print(f"{Fore.RED}Error processing response: {e}{Style.RESET_ALL}")
+        print(f"{Fore.YELLOW}This might be due to a very large response or thinking block.{Style.RESET_ALL}")
+        print(f"{Fore.YELLOW}Try using a more specific query or setting a larger MAX_THINKING_LENGTH.{Style.RESET_ALL}")
+        
+        # Add a placeholder response to the conversation history
+        conversation_history.append({
+            "role": "assistant", 
+            "content": "I encountered an error while processing the response. Please try a more specific query."
+        })
 
 
 def handle_edit_query(user_input, conversation_history):
-    """Handle file editing requests."""
-    # Extract the edit instruction
-    edit_instruction = extract_edit_query(user_input)
+    """Handle file editing queries."""
+    # Extract the edit query
+    edit_query = extract_edit_query(user_input)
     
-    # Get file paths from the instruction
-    clean_instruction, file_paths = get_edit_file_paths(edit_instruction)
+    # Get file paths from the query
+    file_paths = get_edit_file_paths(edit_query)
     
     if not file_paths:
-        print(f"{Fore.RED}Error: No file specified for editing. Please use format: edit: [filename] instruction{Style.RESET_ALL}")
+        print(f"{Fore.YELLOW}No file paths found in the query. Please include file paths in square brackets.{Style.RESET_ALL}")
         return
     
-    # Only edit one file at a time
-    file_path = file_paths[0]
-    print(f"Edit mode enabled for file: {file_path}")
+    # Read file contents
+    files_content_section = "\nFiles to Edit:\n"
+    for file_path in file_paths:
+        content = read_file_content(file_path)
+        if content:
+            files_content_section += f"File: {file_path}\nContent:\n{content}\n\n"
+        else:
+            print(f"{Fore.YELLOW}Warning: Could not read file {file_path}{Style.RESET_ALL}")
     
-    # Read the file content
-    original_content = read_file_content(file_path)
-    if not original_content:
-        return
+    # Construct user message
+    user_message = f"Edit Request: {edit_query}"
+    user_message += files_content_section
+    user_message += "\nPlease provide the complete modified content for each file."
     
-    # Construct prompt for the LLM
-    prompt = f"I need you to edit a file named {file_path}.\n\n"
-    prompt += f"The edit request is: {clean_instruction}\n\n"
-    prompt += f"Here is the current content of {file_path}:\n"
-    prompt += original_content + "\n\n"
-    
-    prompt += "RESPONSE FORMAT REQUIREMENTS:\n"
-    prompt += "1. Return ONLY the complete modified file content, exactly as it should be saved\n"
-    prompt += "2. Include the ENTIRE file content with your changes applied\n"
-    prompt += "3. DO NOT use markdown formatting or code blocks\n"
-    prompt += "4. DO NOT include any explanation or discussion of the changes\n"
-    prompt += "5. DO NOT include markers like 'Modified file:' or 'Updated content:'\n"
-    prompt += "6. Preserve the exact indentation and formatting of any code you're not changing\n"
-    prompt += "7. For adding empty lines, just add the actual blank lines, don't add comments about them\n"
-    prompt += "8. Respond with ONLY the content that should replace the file\n"
-    prompt += "9. For small edits, change only what's necessary - don't reformat or restructure the entire file\n"
-    prompt += "10. DO NOT start your response with phrases like 'Here's the modified file:' - just provide the raw file content\n"
-    prompt += "11. DO NOT add explanatory text like 'empty lines added' or 'added at the end of the file'\n"
-    prompt += "12. DO NOT include any commands or suggestions for commands"
-    
-    # Add the edit request to conversation history
-    conversation_history.append({"role": "user", "content": prompt})
+    # Add the user message to the conversation history
+    conversation_history.append({"role": "user", "content": user_message})
     
     # Print "Thinking..." to indicate processing
     print(f"\n{Fore.YELLOW}Thinking about file edits...{Style.RESET_ALL}\n")
     
-    # Get response from Ollama
-    assistant_response = get_ollama_response(conversation_history)
-    
-    # Extract the modified content
-    modified_content = extract_modified_content(assistant_response, file_path)
-    
-    # If we couldn't extract the content
-    if modified_content is None:
-        print(f"{Fore.RED}Edit canceled. No changes made to {file_path}{Style.RESET_ALL}")
-        return
-    
-    # Generate diff and display it
-    if modified_content and modified_content != original_content:
-        print(f"\n{Fore.CYAN}Proposed changes to {file_path}:{Style.RESET_ALL}")
-        colored_diff = generate_colored_diff(original_content, modified_content, file_path)
-        print(colored_diff)
+    try:
+        # Get response from Ollama
+        assistant_response = get_ollama_response(conversation_history)
         
-        # Ask for confirmation
-        confirm = input(f"\n{Fore.YELLOW}Do you want to save these changes? (y/n): {Style.RESET_ALL}").lower()
-        if confirm in ('y', 'yes'):
-            # Write the content in a way that preserves the original encoding
-            if write_file_content(file_path, modified_content):
-                print(f"{Fore.GREEN}Changes saved to {file_path}{Style.RESET_ALL}")
-                
-                # Add a record of the successful edit to the conversation history
-                edit_summary = f"I've modified file {file_path} as requested, applying the changes shown in the diff."
-                conversation_history.append({"role": "assistant", "content": edit_summary})
-            else:
-                print(f"{Fore.RED}Failed to save changes to {file_path}{Style.RESET_ALL}")
-                
-                # Add a record of the failed edit to the conversation history
-                conversation_history.append({
-                    "role": "assistant", 
-                    "content": f"I attempted to modify file {file_path} but encountered an error when saving the changes."
-                })
-        else:
-            print(f"{Fore.RED}Edit canceled. No changes made to {file_path}{Style.RESET_ALL}")
+        # Process thinking blocks in the response
+        processed_response = process_thinking_blocks(assistant_response)
+        
+        # Display the response
+        print(f"{Fore.CYAN}🤖 Assistant:{Style.RESET_ALL}\n{processed_response}")
+        
+        # Add the assistant's response to the conversation history
+        conversation_history.append({"role": "assistant", "content": assistant_response})
+        
+        # For each file path, extract the modified content and ask for confirmation
+        for file_path in file_paths:
+            modified_content = extract_modified_content(assistant_response, file_path)
             
-            # Add a record of the canceled edit to the conversation history
-            conversation_history.append({
-                "role": "assistant", 
-                "content": f"I suggested changes to {file_path} but they were not applied."
-            })
-    else:
-        print(f"{Fore.YELLOW}No changes were made to the file.{Style.RESET_ALL}")
+            if not modified_content:
+                print(f"{Fore.YELLOW}Could not extract modified content for {file_path}{Style.RESET_ALL}")
+                continue
+            
+            # Generate and display diff
+            original_content = read_file_content(file_path) or ""
+            diff = generate_colored_diff(original_content, modified_content, file_path)
+            
+            print(f"\n{Fore.CYAN}Changes for {file_path}:{Style.RESET_ALL}")
+            print(diff)
+            
+            # Ask for confirmation
+            confirm = input(f"\n{Fore.YELLOW}Apply these changes to {file_path}? (y/n): {Style.RESET_ALL}").lower()
+            
+            if confirm in ('y', 'yes'):
+                # Write the modified content to the file
+                success = write_file_content(file_path, modified_content)
+                if success:
+                    print(f"{Fore.GREEN}Changes applied to {file_path}{Style.RESET_ALL}")
+                else:
+                    print(f"{Fore.RED}Failed to apply changes to {file_path}{Style.RESET_ALL}")
+            else:
+                print(f"{Fore.YELLOW}Changes to {file_path} were not applied{Style.RESET_ALL}")
+    except Exception as e:
+        print(f"{Fore.RED}Error processing response: {e}{Style.RESET_ALL}")
+        print(f"{Fore.YELLOW}This might be due to a very large response or thinking block.{Style.RESET_ALL}")
+        print(f"{Fore.YELLOW}Try using a more specific query or setting a larger MAX_THINKING_LENGTH.{Style.RESET_ALL}")
         
-        # Add a record to the conversation history
+        # Add a placeholder response to the conversation history
         conversation_history.append({
             "role": "assistant", 
-            "content": f"I analyzed {file_path} but did not make any changes."
+            "content": "I encountered an error while processing the response. Please try a more specific query."
         })
 
 
 def handle_run_query(user_input, conversation_history):
-    """Handle command execution requests."""
-    # Extract the run instruction
-    run_instruction = extract_run_query(user_input)
+    """Handle command execution queries."""
+    # Extract the run query
+    run_query = extract_run_query(user_input)
     
-    # Check if this is a specific command (enclosed in quotes)
-    specific_command = extract_specific_command(run_instruction)
+    # Construct user message
+    user_message = f"Command Request: {run_query}\n"
+    user_message += "Please suggest a command to run based on this request. "
+    user_message += "Format your response with the command in a code block using triple backticks."
     
-    if specific_command:
-        # User provided a specific command to run
-        command = specific_command
-        print(f"Executing specific command: {command}")
-    else:
-        # Ask LLM to suggest a command
-        file_list = get_file_list()
-        file_list_str = ", ".join(file_list[:20])  # Limit to 20 files to avoid overloading the prompt
-        
-        # Construct prompt for command suggestion
-        prompt = f"User wants to run: {run_instruction}.\n\n"
-        prompt += f"Current directory contains these files: {file_list_str}\n\n"
-        prompt += "Please suggest a command to run based on the user's request.\n"
-        prompt += "Format your response as:\nSuggested command: [command]"
-        
-        # Add the run request to conversation history
-        conversation_history.append({"role": "user", "content": prompt})
-        
-        # Print "Thinking..." to indicate processing
-        print(f"\n{Fore.YELLOW}Thinking about what command to run...{Style.RESET_ALL}\n")
-        
+    # Add the user message to the conversation history
+    conversation_history.append({"role": "user", "content": user_message})
+    
+    # Print "Thinking..." to indicate processing
+    print(f"\n{Fore.YELLOW}Thinking about what command to run...{Style.RESET_ALL}\n")
+    
+    try:
         # Get response from Ollama
         assistant_response = get_ollama_response(conversation_history)
         
-        # Extract the suggested command
-        command = extract_suggested_command(assistant_response)
+        # Process thinking blocks in the response
+        processed_response = process_thinking_blocks(assistant_response)
         
-        if not command:
-            print(f"{Fore.RED}Error: Could not determine a command to run.{Style.RESET_ALL}")
+        # Display the response
+        print(f"{Fore.CYAN}🤖 Assistant:{Style.RESET_ALL}\n{processed_response}")
+        
+        # Add the assistant's response to the conversation history
+        conversation_history.append({"role": "assistant", "content": assistant_response})
+        
+        # Extract the suggested command
+        suggested_command = extract_suggested_command(assistant_response)
+        
+        if not suggested_command:
+            print(f"{Fore.YELLOW}Could not extract a command from the response.{Style.RESET_ALL}")
             return
         
-        print(f"\n{Fore.CYAN}Suggested command:{Style.RESET_ALL} {command}")
+        # Check if the command is safe
+        if not is_safe_command(suggested_command):
+            print(f"{Fore.RED}Warning: The suggested command may be unsafe: {suggested_command}{Style.RESET_ALL}")
+            print(f"{Fore.RED}This command contains potentially dangerous operations.{Style.RESET_ALL}")
+            confirm = input(f"{Fore.YELLOW}Are you sure you want to run this command? (y/n): {Style.RESET_ALL}").lower()
+            if confirm not in ('y', 'yes'):
+                print(f"{Fore.YELLOW}Command execution cancelled.{Style.RESET_ALL}")
+                return
         
-        # Add the suggestion to conversation history
+        # Ask for confirmation
+        print(f"\n{Fore.CYAN}Suggested command:{Style.RESET_ALL}")
+        print(f"{Fore.GREEN}{suggested_command}{Style.RESET_ALL}")
+        
+        confirm = input(f"\n{Fore.YELLOW}Run this command? (y/n): {Style.RESET_ALL}").lower()
+        
+        if confirm in ('y', 'yes'):
+            # Execute the command
+            print(f"{Fore.CYAN}Executing command...{Style.RESET_ALL}")
+            output = execute_command(suggested_command)
+            
+            # Display the output
+            print(f"{Fore.CYAN}Command output:{Style.RESET_ALL}")
+            print(output)
+            
+            # Add the command execution to the conversation history
+            conversation_history.append({
+                "role": "system", 
+                "content": f"The command '{suggested_command}' was executed with the following output:\n{output}"
+            })
+        else:
+            print(f"{Fore.YELLOW}Command execution cancelled.{Style.RESET_ALL}")
+    except Exception as e:
+        print(f"{Fore.RED}Error processing response: {e}{Style.RESET_ALL}")
+        print(f"{Fore.YELLOW}This might be due to a very large response or thinking block.{Style.RESET_ALL}")
+        print(f"{Fore.YELLOW}Try using a more specific query or setting a larger MAX_THINKING_LENGTH.{Style.RESET_ALL}")
+        
+        # Add a placeholder response to the conversation history
         conversation_history.append({
             "role": "assistant", 
-            "content": f"I suggest running the command: {command}"
+            "content": "I encountered an error while processing the response. Please try a more specific query."
         })
-    
-    # Check command safety
-    is_safe, reason = is_safe_command(command)
-    
-    if not is_safe:
-        print(f"{Fore.RED}Warning: {reason}{Style.RESET_ALL}")
-        confirm = input(f"{Fore.RED}This command seems unsafe. Are you sure you want to proceed? (y/n): {Style.RESET_ALL}").lower()
-        if confirm != 'y' and confirm != 'yes':
-            print(f"{Fore.YELLOW}Command execution canceled.{Style.RESET_ALL}")
-            return
-    else:
-        # Ask for confirmation
-        confirm = input(f"\n{Fore.YELLOW}Do you want to run this command? (y/n): {Style.RESET_ALL}").lower()
-        if confirm != 'y' and confirm != 'yes':
-            print(f"{Fore.YELLOW}Command execution canceled.{Style.RESET_ALL}")
-            return
-    
-    # Execute the command
-    print(f"{Fore.CYAN}Executing: {command}{Style.RESET_ALL}")
-    output = execute_command(command)
-    
-    # Display the output
-    print(f"\n{Fore.CYAN}Command Output:{Style.RESET_ALL}\n{output}")
-    
-    # Add the execution result to conversation history
-    conversation_history.append({
-        "role": "assistant", 
-        "content": f"I executed the command: {command}\n\nOutput:\n{output}"
-    })
 
 
 def handle_model_query(user_input, conversation_history):
-    """Handle model change requests."""
+    """Handle model switching queries."""
     global CURRENT_MODEL
     
-    # Extract the model instruction
-    model_instruction = extract_model_query(user_input)
+    # Extract the model name
+    model_name = extract_model_query(user_input)
     
-    # Check if this is a specific model (enclosed in quotes)
-    specific_model = extract_specific_command(model_instruction)
+    if not model_name:
+        print(f"{Fore.YELLOW}Could not extract a model name from the query.{Style.RESET_ALL}")
+        return
     
-    if specific_model:
-        # User provided a specific model to use
-        model = specific_model
-        print(f"Using specific model: {model}")
-    else:
-        # Use the model instruction directly if it's not empty
-        if model_instruction.strip():
-            model = model_instruction.strip()
-            print(f"Using model: {model}")
-        else:
-            # Get available models from Ollama
-            try:
-                response = requests.get("http://localhost:11434/api/tags")
-                if response.status_code == 200:
-                    models = response.json().get("models", [])
-                    if models:
-                        available_models = [model.get("name") for model in models]
-                        print(f"Available models: {', '.join(available_models)}")
-                        
-                        # Ask user to select a model
-                        print(f"Current model: {CURRENT_MODEL}")
-                        model = input(f"{Fore.YELLOW}Enter the model name to use: {Style.RESET_ALL}")
-                    else:
-                        print(f"{Fore.RED}No models found in Ollama.{Style.RESET_ALL}")
+    try:
+        # Check if the model is available
+        try:
+            response = requests.get("http://localhost:11434/api/tags")
+            if response.status_code == 200:
+                available_models = [model.get("name") for model in response.json().get("models", [])]
+                
+                if model_name not in available_models:
+                    print(f"{Fore.YELLOW}Warning: Model '{model_name}' not found in available models.{Style.RESET_ALL}")
+                    print(f"{Fore.YELLOW}Available models: {', '.join(available_models)}{Style.RESET_ALL}")
+                    
+                    # Ask for confirmation
+                    confirm = input(f"{Fore.YELLOW}Do you still want to try using this model? (y/n): {Style.RESET_ALL}").lower()
+                    if confirm not in ('y', 'yes'):
+                        print(f"{Fore.YELLOW}Model change cancelled.{Style.RESET_ALL}")
                         return
-                else:
-                    print(f"{Fore.RED}Error connecting to Ollama: HTTP {response.status_code}{Style.RESET_ALL}")
+            else:
+                print(f"{Fore.YELLOW}Warning: Could not verify available models. HTTP {response.status_code}{Style.RESET_ALL}")
+                
+                # Ask for confirmation
+                confirm = input(f"{Fore.YELLOW}Do you want to try using model '{model_name}'? (y/n): {Style.RESET_ALL}").lower()
+                if confirm not in ('y', 'yes'):
+                    print(f"{Fore.YELLOW}Model change cancelled.{Style.RESET_ALL}")
                     return
-            except requests.exceptions.RequestException as e:
-                print(f"{Fore.RED}Error communicating with Ollama API: {e}{Style.RESET_ALL}")
+        except requests.exceptions.RequestException as e:
+            print(f"{Fore.YELLOW}Warning: Could not connect to Ollama to verify available models: {e}{Style.RESET_ALL}")
+            
+            # Ask for confirmation
+            confirm = input(f"{Fore.YELLOW}Do you want to try using model '{model_name}'? (y/n): {Style.RESET_ALL}").lower()
+            if confirm not in ('y', 'yes'):
+                print(f"{Fore.YELLOW}Model change cancelled.{Style.RESET_ALL}")
                 return
-    
-    # Change the model
-    if model:
-        print(f"{Fore.CYAN}Changing model from {CURRENT_MODEL} to: {model}{Style.RESET_ALL}")
-        CURRENT_MODEL = model
         
-        # Add the model change to conversation history
-        conversation_history.append({
-            "role": "system", 
-            "content": f"The model has been changed to {model}."
-        })
-    else:
-        print(f"{Fore.YELLOW}Model change canceled. Still using: {CURRENT_MODEL}{Style.RESET_ALL}")
+        # Change the model
+        model = model_name.strip()
+        
+        # Ask for confirmation
+        confirm = input(f"{Fore.YELLOW}Change model from {CURRENT_MODEL} to {model}? (y/n): {Style.RESET_ALL}").lower()
+        
+        if confirm in ('y', 'yes'):
+            print(f"{Fore.CYAN}Changing model from {CURRENT_MODEL} to: {model}{Style.RESET_ALL}")
+            CURRENT_MODEL = model
+            
+            # Add the model change to conversation history
+            conversation_history.append({
+                "role": "system", 
+                "content": f"The model has been changed to {model}."
+            })
+        else:
+            print(f"{Fore.YELLOW}Model change canceled. Still using: {CURRENT_MODEL}{Style.RESET_ALL}")
+    except Exception as e:
+        print(f"{Fore.RED}Error processing model change: {e}{Style.RESET_ALL}")
+        print(f"{Fore.YELLOW}Model change failed. Still using: {CURRENT_MODEL}{Style.RESET_ALL}")
 
 
 def handle_regular_query(user_input, conversation_history):
@@ -1149,14 +1183,28 @@ def handle_regular_query(user_input, conversation_history):
     # Print "Thinking..." to indicate processing
     print(f"\n{Fore.YELLOW}Thinking...{Style.RESET_ALL}\n")
     
-    # Get response from Ollama
-    assistant_response = get_ollama_response(conversation_history)
-    
-    # Display the response
-    print(f"{Fore.CYAN}🤖 Assistant:{Style.RESET_ALL}\n{assistant_response}")
-    
-    # Add the assistant's response to the conversation history
-    conversation_history.append({"role": "assistant", "content": assistant_response})
+    try:
+        # Get response from Ollama
+        assistant_response = get_ollama_response(conversation_history)
+        
+        # Process thinking blocks in the response
+        processed_response = process_thinking_blocks(assistant_response)
+        
+        # Display the response
+        print(f"{Fore.CYAN}🤖 Assistant:{Style.RESET_ALL}\n{processed_response}")
+        
+        # Add the assistant's response to the conversation history
+        conversation_history.append({"role": "assistant", "content": assistant_response})
+    except Exception as e:
+        print(f"{Fore.RED}Error processing response: {e}{Style.RESET_ALL}")
+        print(f"{Fore.YELLOW}This might be due to a very large response or thinking block.{Style.RESET_ALL}")
+        print(f"{Fore.YELLOW}Try using a more specific query or setting a larger MAX_THINKING_LENGTH.{Style.RESET_ALL}")
+        
+        # Add a placeholder response to the conversation history
+        conversation_history.append({
+            "role": "assistant", 
+            "content": "I encountered an error while processing the response. Please try a more specific query."
+        })
 
 
 if __name__ == "__main__":
