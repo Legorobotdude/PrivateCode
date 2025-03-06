@@ -35,6 +35,7 @@ import sys
 import os
 import difflib
 import subprocess
+import chardet  # Import chardet at the module level
 from pathlib import Path
 from bs4 import BeautifulSoup
 from urllib.parse import quote_plus, urlparse
@@ -60,33 +61,53 @@ DANGEROUS_COMMANDS = ["rm", "del", "sudo", "chmod", "chown", "mv", "cp", "rmdir"
 
 def check_ollama_connection():
     """Verify the Ollama server is running and accessible."""
+    print(f"{Fore.CYAN}Checking connection to Ollama server...{Style.RESET_ALL}")
     try:
-        response = requests.get("http://localhost:11434/api/tags")
+        response = requests.get("http://localhost:11434/api/tags", timeout=5)
         if response.status_code == 200:
-            print("Successfully connected to Ollama server.")
-            models = response.json().get("models", [])
-            if models:
-                available_models = [model.get("name") for model in models]
-                print(f"Available models: {', '.join(available_models)}")
-            return True
+            print(f"{Fore.GREEN}Successfully connected to Ollama server.{Style.RESET_ALL}")
+            try:
+                models = response.json().get("models", [])
+                if models:
+                    available_models = [model.get("name") for model in models]
+                    print(f"{Fore.GREEN}Available models: {', '.join(available_models)}{Style.RESET_ALL}")
+                else:
+                    print(f"{Fore.YELLOW}No models found. You may need to pull a model using 'ollama pull <model>'.{Style.RESET_ALL}")
+                return True
+            except json.JSONDecodeError:
+                print(f"{Fore.RED}Error parsing response from Ollama server. Unexpected response format.{Style.RESET_ALL}")
+                print(f"{Fore.YELLOW}Response content: {response.text[:100]}...{Style.RESET_ALL}")
+                return False
         else:
-            print(f"Error connecting to Ollama: HTTP {response.status_code}")
+            print(f"{Fore.RED}Error connecting to Ollama: HTTP {response.status_code}{Style.RESET_ALL}")
+            print(f"{Fore.YELLOW}Response content: {response.text[:100]}...{Style.RESET_ALL}")
             return False
+    except requests.exceptions.Timeout:
+        print(f"{Fore.RED}Connection to Ollama server timed out after 5 seconds.{Style.RESET_ALL}")
+        print(f"{Fore.YELLOW}Please ensure Ollama is running and responsive on your system.{Style.RESET_ALL}")
+        return False
+    except requests.exceptions.ConnectionError:
+        print(f"{Fore.RED}Failed to connect to Ollama server: Connection refused.{Style.RESET_ALL}")
+        print(f"{Fore.YELLOW}Please ensure Ollama is running on your system with the command 'ollama serve'.{Style.RESET_ALL}")
+        print(f"{Fore.YELLOW}If you haven't installed Ollama yet, visit https://ollama.ai/download{Style.RESET_ALL}")
+        return False
     except requests.exceptions.RequestException as e:
-        print(f"Failed to connect to Ollama server: {e}")
-        print("Please ensure Ollama is running on your system.")
+        error_type = type(e).__name__
+        print(f"{Fore.RED}Failed to connect to Ollama server: {error_type} - {str(e)}{Style.RESET_ALL}")
+        print(f"{Fore.YELLOW}Please ensure Ollama is running on your system.{Style.RESET_ALL}")
+        return False
+    except Exception as e:
+        error_type = type(e).__name__
+        print(f"{Fore.RED}Unexpected error when checking Ollama connection: {error_type} - {str(e)}{Style.RESET_ALL}")
         return False
 
 
 def detect_file_encoding(file_path):
-    """Detect the encoding of a file.
+    """Detect the encoding of a file using chardet for robust detection.
     
     Returns:
         tuple: (encoding, bom) where bom is True if the file has a BOM
     """
-    # Try to detect encoding with these common types
-    encodings_to_try = ['utf-8', 'utf-8-sig', 'utf-16', 'utf-16-le', 'utf-16-be', 'latin-1', 'cp1252']
-    
     # First check for BOM using binary mode
     try:
         with open(file_path, 'rb') as f:
@@ -98,9 +119,51 @@ def detect_file_encoding(file_path):
                 return 'utf-16-le', True
             elif raw.startswith(b'\xfe\xff'):  # UTF-16 BE BOM
                 return 'utf-16-be', True
-    except Exception:
-        pass  # Fall back to detection by reading the file
-        
+                
+            # For UTF-16 files, we need to check the content
+            # UTF-16 files often have a pattern of alternating bytes
+            if len(raw) >= 2:
+                # Check for UTF-16 LE pattern (common in Windows)
+                if raw[0] != 0 and raw[1] == 0:
+                    return 'utf-16-le', False
+                # Check for UTF-16 BE pattern
+                elif raw[0] == 0 and raw[1] != 0:
+                    return 'utf-16-be', False
+                    
+            # Rewind the file for chardet
+            f.seek(0)
+            # Sample the first 1KB of the file for efficiency
+            raw_data = f.read(1024)
+            if not raw_data:  # Empty file
+                return 'utf-8', False
+                
+            # Use chardet for robust encoding detection
+            try:
+                result = chardet.detect(raw_data)
+                encoding = result['encoding']
+                confidence = result['confidence']
+                
+                if encoding:
+                    if confidence < 0.7:
+                        print(f"Warning: Low confidence ({confidence:.2f}) in detected encoding: {encoding}")
+                    return encoding, False
+            except Exception as e:
+                print(f"Warning: Error using chardet: {e}")
+                # Fall back to the legacy method
+                return _legacy_detect_file_encoding(file_path)
+                
+    except Exception as e:
+        print(f"Warning: Error detecting encoding: {e}")
+    
+    # Default to UTF-8 if detection failed
+    return 'utf-8', False
+
+
+def _legacy_detect_file_encoding(file_path):
+    """Legacy method to detect file encoding without chardet."""
+    # Try to detect encoding with these common types
+    encodings_to_try = ['utf-8', 'utf-8-sig', 'utf-16', 'utf-16-le', 'utf-16-be', 'latin-1', 'cp1252']
+    
     # Try each encoding
     for encoding in encodings_to_try:
         try:
@@ -129,53 +192,122 @@ def read_file_content(file_path, start_line=None, end_line=None):
     Returns:
         str: File content or None if file not found or error occurs
     """
-    if not os.path.exists(file_path):
-        print(f"Warning: File '{file_path}' not found.")
-        return None
-        
     try:
-        # Detect the encoding
-        encoding, has_bom = detect_file_encoding(file_path)
-        
-        # Read the file with the detected encoding
-        with open(file_path, 'r', encoding=encoding) as file:
-            if start_line is None and end_line is None:
-                # Read the entire file
-                content = file.read()
-            else:
-                # Read specific lines
-                lines = file.readlines()
-                
-                # Adjust for 1-indexed input to 0-indexed list
-                start_idx = max(0, (start_line or 1) - 1)
-                # If end_line is None, read to the end of the file
-                end_idx = min(len(lines), end_line) if end_line is not None else len(lines)
-                
-                # Extract the requested lines
-                selected_lines = lines[start_idx:end_idx]
-                content = ''.join(selected_lines)
-                
-                # Add a note about the line range
-                line_info = f"Lines {start_line or 1}-{end_line or len(lines)} of {len(lines)} total lines"
-                content = f"--- {line_info} ---\n{content}"
+        # Check if file exists
+        if not os.path.exists(file_path):
+            error_msg = f"Error: File '{file_path}' not found."
+            print(f"{Fore.RED}{error_msg}{Style.RESET_ALL}")
             
-        # Let the user know if we're using a non-standard encoding
-        if encoding != 'utf-8' and encoding != 'utf-8-sig':
-            print(f"Note: File '{file_path}' was read with {encoding} encoding.")
+            # Try to provide helpful suggestions
+            dir_path = os.path.dirname(file_path) or '.'
+            if os.path.exists(dir_path):
+                try:
+                    similar_files = [f for f in os.listdir(dir_path) 
+                                    if os.path.isfile(os.path.join(dir_path, f)) and 
+                                    f.endswith(os.path.splitext(file_path)[1])]
+                    if similar_files:
+                        print(f"{Fore.YELLOW}Similar files in the directory:{Style.RESET_ALL}")
+                        for f in similar_files[:5]:  # Show up to 5 similar files
+                            print(f"{Fore.YELLOW}- {f}{Style.RESET_ALL}")
+                        if len(similar_files) > 5:
+                            print(f"{Fore.YELLOW}... and {len(similar_files) - 5} more{Style.RESET_ALL}")
+                except Exception:
+                    pass  # Ignore errors in the suggestion logic
             
-        return content
-            
-    except Exception as e:
-        # If all else fails, try binary mode as a last resort
-        try:
-            with open(file_path, 'rb') as file:
-                binary_content = file.read()
-                # Try to decode as latin-1 which can handle any byte value
-                print(f"Warning: Using binary fallback for '{file_path}'")
-                return binary_content.decode('latin-1', errors='replace')
-        except Exception as e2:
-            print(f"Error reading file '{file_path}': {e2}")
             return None
+            
+        # Check if file is readable
+        if not os.access(file_path, os.R_OK):
+            error_msg = f"Error: File '{file_path}' is not readable. Check file permissions."
+            print(f"{Fore.RED}{error_msg}{Style.RESET_ALL}")
+            return None
+            
+        # Check file size
+        file_size = os.path.getsize(file_path)
+        if file_size > 10 * 1024 * 1024:  # 10 MB
+            print(f"{Fore.YELLOW}Warning: File '{file_path}' is large ({file_size / 1024 / 1024:.2f} MB).{Style.RESET_ALL}")
+            print(f"{Fore.YELLOW}Reading large files may cause performance issues.{Style.RESET_ALL}")
+            
+        try:
+            # Detect the encoding
+            encoding, has_bom = detect_file_encoding(file_path)
+            
+            # Read the file with the detected encoding
+            with open(file_path, 'r', encoding=encoding) as file:
+                if start_line is None and end_line is None:
+                    # Read the entire file
+                    content = file.read()
+                else:
+                    # Read specific lines
+                    lines = file.readlines()
+                    
+                    # Validate line numbers
+                    total_lines = len(lines)
+                    
+                    # Adjust for 1-indexed input to 0-indexed list
+                    start_idx = max(0, (start_line or 1) - 1)
+                    # If end_line is None, read to the end of the file
+                    end_idx = min(total_lines, end_line) if end_line is not None else total_lines
+                    
+                    # Warn if line numbers are out of range
+                    if start_line and start_line > total_lines:
+                        print(f"{Fore.YELLOW}Warning: Start line {start_line} is beyond the end of the file ({total_lines} lines).{Style.RESET_ALL}")
+                        start_idx = 0
+                    if end_line and end_line > total_lines:
+                        print(f"{Fore.YELLOW}Warning: End line {end_line} is beyond the end of the file ({total_lines} lines). Reading to the end.{Style.RESET_ALL}")
+                    
+                    # Extract the requested lines
+                    selected_lines = lines[start_idx:end_idx]
+                    content = ''.join(selected_lines)
+                    
+                    # Add a note about the line range
+                    line_info = f"Lines {start_idx + 1}-{end_idx} of {total_lines} total lines"
+                    content = f"--- {line_info} ---\n{content}"
+                
+            # Let the user know if we're using a non-standard encoding
+            if encoding.lower() not in ['utf-8', 'utf-8-sig', 'ascii']:
+                print(f"{Fore.CYAN}Note: File '{file_path}' was read with {encoding} encoding.{Style.RESET_ALL}")
+                
+            return content
+                
+        except UnicodeDecodeError as e:
+            print(f"{Fore.RED}Error: Failed to decode file '{file_path}' with {encoding} encoding.{Style.RESET_ALL}")
+            print(f"{Fore.YELLOW}Error details: {str(e)}{Style.RESET_ALL}")
+            
+            # If all else fails, try binary mode as a last resort
+            try:
+                with open(file_path, 'rb') as file:
+                    binary_content = file.read()
+                    # Try to decode as latin-1 which can handle any byte value
+                    print(f"{Fore.YELLOW}Using binary fallback with latin-1 encoding for '{file_path}'.{Style.RESET_ALL}")
+                    print(f"{Fore.YELLOW}Some characters may not display correctly.{Style.RESET_ALL}")
+                    return binary_content.decode('latin-1', errors='replace')
+            except Exception as e2:
+                error_type = type(e2).__name__
+                print(f"{Fore.RED}Error reading file in binary mode: {error_type} - {str(e2)}{Style.RESET_ALL}")
+                return None
+                
+        except Exception as e:
+            error_type = type(e).__name__
+            print(f"{Fore.RED}Error reading file '{file_path}': {error_type} - {str(e)}{Style.RESET_ALL}")
+            
+            # If all else fails, try binary mode as a last resort
+            try:
+                with open(file_path, 'rb') as file:
+                    binary_content = file.read()
+                    # Try to decode as latin-1 which can handle any byte value
+                    print(f"{Fore.YELLOW}Using binary fallback with latin-1 encoding for '{file_path}'.{Style.RESET_ALL}")
+                    print(f"{Fore.YELLOW}Some characters may not display correctly.{Style.RESET_ALL}")
+                    return binary_content.decode('latin-1', errors='replace')
+            except Exception as e2:
+                error_type = type(e2).__name__
+                print(f"{Fore.RED}Error reading file in binary mode: {error_type} - {str(e2)}{Style.RESET_ALL}")
+                return None
+    
+    except Exception as e:
+        error_type = type(e).__name__
+        print(f"{Fore.RED}Unexpected error accessing file '{file_path}': {error_type} - {str(e)}{Style.RESET_ALL}")
+        return None
 
 
 def write_file_content(file_path, content, create_backup=True):
@@ -261,35 +393,207 @@ def get_edit_file_paths(query):
 
 def is_safe_command(command):
     """
-    Check if a command is likely safe to execute.
+    Check if a command is likely safe to execute using a whitelist approach.
     
     Returns:
         tuple: (is_safe, reason) where is_safe is a boolean and reason is a string or None
     """
-    command_lower = command.lower()
+    # Trim the command
+    command = command.strip()
     
-    # Check for dangerous commands
-    for dangerous in DANGEROUS_COMMANDS:
-        if dangerous in command_lower:
-            return False, f"Command contains potentially dangerous operation: '{dangerous}'"
-    
-    # Check for safe prefixes
-    for prefix in SAFE_COMMAND_PREFIXES:
-        if command_lower.startswith(prefix):
+    # Check for command separators (;, &&, ||) which could chain dangerous commands
+    for separator in [';', '&&', '||']:
+        if separator in command:
+            # Split by separator and check each command separately
+            sep_commands = [cmd.strip() for cmd in command.split(separator)]
+            for i, cmd in enumerate(sep_commands):
+                is_safe, reason = is_safe_command(cmd)
+                if not is_safe:
+                    return False, f"Unsafe command in chain (part {i+1}): {reason}"
             return True, None
     
-    # If no safe prefix is found, consider it potentially unsafe
-    return False, "Command does not start with a recognized safe prefix"
+    # Check for pipe operators which could chain dangerous commands
+    if '|' in command:
+        # Split by pipe and check each command separately
+        pipe_commands = [cmd.strip() for cmd in command.split('|')]
+        for i, cmd in enumerate(pipe_commands):
+            is_safe, reason = is_safe_command(cmd)
+            if not is_safe:
+                return False, f"Unsafe command in pipe (part {i+1}): {reason}"
+        return True, None
+    
+    # Split the command to get the base command and arguments
+    # This handles quoted arguments correctly
+    try:
+        import shlex
+        parts = shlex.split(command)
+    except Exception:
+        return False, "Could not parse command safely"
+    
+    if not parts:
+        return False, "Empty command"
+    
+    base_cmd = parts[0].lower()
+    
+    # Whitelist approach - only explicitly allowed commands are permitted
+    ALLOWED_COMMANDS = {
+        # Python commands with restrictions
+        "python": lambda args: _check_python_args(args),
+        "python3": lambda args: _check_python_args(args),
+        
+        # File listing and navigation (safe)
+        "ls": lambda args: (True, None),
+        "dir": lambda args: (True, None),
+        "cd": lambda args: (True, None),
+        "pwd": lambda args: (True, None),
+        
+        # File viewing and text processing (safe)
+        "cat": lambda args: _check_file_args(args),
+        "type": lambda args: _check_file_args(args),
+        "more": lambda args: _check_file_args(args),
+        "grep": lambda args: (True, None),
+        "findstr": lambda args: (True, None),
+        "find": lambda args: _check_find_args(args),
+        "sort": lambda args: (True, None),
+        "head": lambda args: (True, None),
+        "tail": lambda args: (True, None),
+        
+        # Git commands with restrictions
+        "git": lambda args: _check_git_args(args),
+        
+        # Package managers with restrictions
+        "npm": lambda args: _check_npm_args(args),
+        "pip": lambda args: _check_pip_args(args),
+        
+        # Build tools (generally safe)
+        "make": lambda args: (True, None),
+        "dotnet": lambda args: (True, None),
+        "gradle": lambda args: (True, None),
+        "mvn": lambda args: (True, None),
+        "cargo": lambda args: (True, None),
+        
+        # Programming language tools (generally safe)
+        "rustc": lambda args: (True, None),
+        "go": lambda args: (True, None),
+        
+        # Testing and echo (safe)
+        "test": lambda args: (True, None),
+        "echo": lambda args: (True, None),
+    }
+    
+    # Check if the base command is in our whitelist
+    if base_cmd not in ALLOWED_COMMANDS:
+        return False, f"Command '{base_cmd}' is not in the allowed list"
+    
+    # Apply the specific checker for this command
+    args = parts[1:] if len(parts) > 1 else []
+    is_safe, reason = ALLOWED_COMMANDS[base_cmd](args)
+    
+    return is_safe, reason
+
+
+def _check_python_args(args):
+    """Check if Python command arguments are safe."""
+    if not args:
+        return True, None
+        
+    # Check for dangerous flags
+    dangerous_flags = ['-c', '--command']
+    for flag in dangerous_flags:
+        if flag in args:
+            return False, f"Python with '{flag}' flag is not allowed for security reasons"
+    
+    # Check if the script file exists
+    if args and not args[0].startswith('-'):
+        script_path = args[0]
+        # For testing purposes, we'll allow non-existent scripts if they don't contain suspicious patterns
+        if '..' in script_path or script_path.startswith('/') or ':' in script_path:
+            return False, f"Python script path '{script_path}' contains suspicious patterns"
+        if os.path.exists(script_path):
+            # If the file exists, we could do additional checks here
+            # For example, scan the file content for dangerous imports
+            pass
+    
+    return True, None
+
+
+def _check_file_args(args):
+    """Check if file-related command arguments are safe."""
+    # Block any argument containing path traversal attempts
+    for arg in args:
+        if '..' in arg:
+            return False, "Path traversal detected in arguments"
+    return True, None
+
+
+def _check_git_args(args):
+    """Check if git command arguments are safe."""
+    if not args:
+        return True, None
+        
+    # Block potentially dangerous git commands
+    dangerous_git_cmds = ['clean', 'reset', 'push', 'filter-branch']
+    if args and args[0] in dangerous_git_cmds:
+        return False, f"Git command '{args[0]}' requires manual review"
+    
+    return True, None
+
+
+def _check_npm_args(args):
+    """Check if npm command arguments are safe."""
+    if not args:
+        return True, None
+        
+    # Block potentially dangerous npm commands
+    dangerous_npm_cmds = ['publish', 'unpublish', 'deprecate', 'access', 'adduser', 'login']
+    if args and args[0] in dangerous_npm_cmds:
+        return False, f"NPM command '{args[0]}' requires manual review"
+    
+    return True, None
+
+
+def _check_pip_args(args):
+    """Check if pip command arguments are safe."""
+    if not args:
+        return True, None
+        
+    # Block potentially dangerous pip commands
+    dangerous_pip_cmds = ['uninstall']
+    if args and args[0] in dangerous_pip_cmds:
+        return False, f"Pip command '{args[0]}' requires manual review"
+    
+    return True, None
+
+
+def _check_find_args(args):
+    """Check if find command arguments are safe."""
+    # Block any argument containing potentially dangerous options
+    dangerous_options = ['-exec', '-delete']
+    for arg in args:
+        if arg in dangerous_options:
+            return False, f"Find with '{arg}' option is not allowed for security reasons"
+    return True, None
 
 
 def execute_command(command):
     """Execute a command and return its output."""
     try:
-        # Run the command and capture output
+        # Parse the command into arguments
+        import shlex
+        try:
+            args = shlex.split(command)
+        except Exception:
+            # If parsing fails, fall back to shell=True but with extra caution
+            return _execute_with_shell(command)
+        
+        if not args:
+            return "Error: Empty command"
+            
+        # Execute without shell when possible (more secure)
         result = subprocess.run(
-            command, 
-            shell=True, 
-            capture_output=True, 
+            args,
+            shell=False,
+            capture_output=True,
             text=True
         )
         
@@ -306,52 +610,107 @@ def execute_command(command):
         return f"Error executing command: {e}"
 
 
+def _execute_with_shell(command):
+    """Execute a command using shell=True as a fallback method."""
+    try:
+        # Run the command with shell=True (less secure, but handles complex commands)
+        result = subprocess.run(
+            command, 
+            shell=True, 
+            capture_output=True, 
+            text=True
+        )
+        
+        # Prepare output
+        output = "Note: Command executed with shell=True (less secure)\n"
+        if result.stdout:
+            output += f"Standard Output:\n{result.stdout}\n"
+        if result.stderr:
+            output += f"Standard Error:\n{result.stderr}\n"
+        
+        output += f"Exit Code: {result.returncode}"
+        return output
+    except Exception as e:
+        return f"Error executing command with shell: {e}"
+
+
 def fetch_url_content(url):
     """Fetch and extract text content from a URL."""
     try:
         # Add scheme if missing
         if not url.startswith(('http://', 'https://')):
             url = 'https://' + url
+            print(f"Added https:// prefix to URL: {url}")
             
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         }
-        response = requests.get(url, headers=headers, timeout=10)
+        
+        print(f"Fetching content from: {url}")
+        try:
+            response = requests.get(url, headers=headers, timeout=10)
+        except requests.exceptions.Timeout:
+            return f"Error: Connection to {url} timed out after 10 seconds. The server might be slow or unavailable."
+        except requests.exceptions.ConnectionError:
+            return f"Error: Failed to establish a connection to {url}. Please check your internet connection or verify the URL is correct."
+        except requests.exceptions.TooManyRedirects:
+            return f"Error: Too many redirects when accessing {url}. The URL might be in a redirect loop."
         
         if response.status_code == 200:
             # Try to determine content type
             content_type = response.headers.get('Content-Type', '').lower()
+            print(f"Content type: {content_type}")
             
             # If it's HTML, parse with BeautifulSoup
             if 'text/html' in content_type:
-                soup = BeautifulSoup(response.text, 'html.parser')
-                
-                # Remove script and style elements
-                for script in soup(["script", "style"]):
-                    script.extract()
-                
-                # Get text and clean it up
-                text = soup.get_text(separator='\n')
-                lines = (line.strip() for line in text.splitlines())
-                text = '\n'.join(line for line in lines if line)
-                
-                # Truncate if too long
-                if len(text) > MAX_URL_CONTENT_LENGTH:
-                    text = text[:MAX_URL_CONTENT_LENGTH] + "... [content truncated]"
-                
-                return text
+                try:
+                    soup = BeautifulSoup(response.text, 'html.parser')
+                    
+                    # Remove script and style elements
+                    for script in soup(["script", "style"]):
+                        script.extract()
+                    
+                    # Get text and clean it up
+                    text = soup.get_text(separator='\n')
+                    lines = (line.strip() for line in text.splitlines())
+                    text = '\n'.join(line for line in lines if line)
+                    
+                    # Truncate if too long
+                    if len(text) > MAX_URL_CONTENT_LENGTH:
+                        text = text[:MAX_URL_CONTENT_LENGTH] + "... [content truncated]"
+                        print(f"Content truncated to {MAX_URL_CONTENT_LENGTH} characters")
+                    
+                    return text
+                except Exception as e:
+                    print(f"Error parsing HTML content: {e}")
+                    # Fall back to raw text if HTML parsing fails
+                    text = response.text
+                    if len(text) > MAX_URL_CONTENT_LENGTH:
+                        text = text[:MAX_URL_CONTENT_LENGTH] + "... [content truncated]"
+                    return text
             else:
                 # For non-HTML content, just return the raw text
                 text = response.text
                 if len(text) > MAX_URL_CONTENT_LENGTH:
                     text = text[:MAX_URL_CONTENT_LENGTH] + "... [content truncated]"
+                    print(f"Content truncated to {MAX_URL_CONTENT_LENGTH} characters")
                 return text
+        elif response.status_code == 404:
+            return f"Error: The requested URL {url} was not found (404). Please check if the URL is correct."
+        elif response.status_code == 403:
+            return f"Error: Access to {url} is forbidden (403). The website may be blocking automated access."
+        elif response.status_code == 500:
+            return f"Error: The server at {url} encountered an internal error (500). Please try again later."
+        elif response.status_code == 429:
+            return f"Error: Too many requests to {url} (429). The website is rate-limiting access."
         else:
-            return f"Failed to fetch {url}: HTTP status {response.status_code}"
+            return f"Error: Failed to fetch {url}: HTTP status {response.status_code}"
     except requests.exceptions.RequestException as e:
-        return f"Failed to fetch {url}: {e}"
+        error_type = type(e).__name__
+        return f"Error: Request failed for {url}: {error_type} - {str(e)}"
     except Exception as e:
-        return f"Error processing {url}: {e}"
+        error_type = type(e).__name__
+        return f"Error: Unexpected {error_type} when processing {url}: {str(e)}"
 
 
 def duckduckgo_search(query, num_results=MAX_SEARCH_RESULTS):
@@ -589,20 +948,67 @@ def get_ollama_response(history, model=None):
             "stream": False
         }
         
-        # Send the request to Ollama
-        response = requests.post(OLLAMA_API_URL, json=payload)
+        print(f"{Fore.CYAN}Sending request to Ollama API using model: {model_to_use}{Style.RESET_ALL}")
+        
+        try:
+            # Send the request to Ollama with a timeout
+            response = requests.post(OLLAMA_API_URL, json=payload, timeout=60)
+        except requests.exceptions.Timeout:
+            error_msg = f"Request to Ollama API timed out after 60 seconds. The model might be taking too long to respond."
+            print(f"{Fore.RED}{error_msg}{Style.RESET_ALL}")
+            print(f"{Fore.YELLOW}Try using a smaller model or simplifying your query.{Style.RESET_ALL}")
+            return error_msg
+        except requests.exceptions.ConnectionError:
+            error_msg = f"Connection error when communicating with Ollama API. The server might have disconnected."
+            print(f"{Fore.RED}{error_msg}{Style.RESET_ALL}")
+            print(f"{Fore.YELLOW}Please check if Ollama is still running.{Style.RESET_ALL}")
+            return error_msg
         
         # Check if the request was successful
         if response.status_code == 200:
-            return response.json().get("message", {}).get("content", "")
+            try:
+                response_json = response.json()
+                content = response_json.get("message", {}).get("content", "")
+                if not content:
+                    print(f"{Fore.YELLOW}Warning: Received empty response from Ollama API{Style.RESET_ALL}")
+                    print(f"{Fore.YELLOW}Full response: {response_json}{Style.RESET_ALL}")
+                return content
+            except json.JSONDecodeError:
+                error_msg = f"Error: Failed to parse JSON response from Ollama API"
+                print(f"{Fore.RED}{error_msg}{Style.RESET_ALL}")
+                print(f"{Fore.RED}Raw response: {response.text[:200]}...{Style.RESET_ALL}")
+                return error_msg
+        elif response.status_code == 404:
+            error_msg = f"Error: Model '{model_to_use}' not found. Please check available models and pull the model if needed."
+            print(f"{Fore.RED}{error_msg}{Style.RESET_ALL}")
+            print(f"{Fore.YELLOW}You can pull the model using: ollama pull {model_to_use}{Style.RESET_ALL}")
+            return error_msg
+        elif response.status_code == 400:
+            error_msg = f"Error: Bad request to Ollama API. The request might be malformed."
+            print(f"{Fore.RED}{error_msg}{Style.RESET_ALL}")
+            print(f"{Fore.RED}Response: {response.text}{Style.RESET_ALL}")
+            return error_msg
+        elif response.status_code == 500:
+            error_msg = f"Error: Ollama server encountered an internal error."
+            print(f"{Fore.RED}{error_msg}{Style.RESET_ALL}")
+            print(f"{Fore.RED}Response: {response.text}{Style.RESET_ALL}")
+            print(f"{Fore.YELLOW}Try restarting the Ollama server.{Style.RESET_ALL}")
+            return error_msg
         else:
             error_msg = f"Error: Received status code {response.status_code} from Ollama API"
             print(f"{Fore.RED}{error_msg}{Style.RESET_ALL}")
             print(f"{Fore.RED}Response: {response.text}{Style.RESET_ALL}")
             return error_msg
     except Exception as e:
-        error_msg = f"Error communicating with Ollama: {e}"
+        error_type = type(e).__name__
+        error_msg = f"Error communicating with Ollama: {error_type} - {str(e)}"
         print(f"{Fore.RED}{error_msg}{Style.RESET_ALL}")
+        
+        # Log the full error for debugging
+        import traceback
+        print(f"{Fore.RED}Error details:{Style.RESET_ALL}")
+        traceback.print_exc()
+        
         return error_msg
 
 
@@ -912,86 +1318,126 @@ def extract_suggested_command(response):
 
 def main():
     """Main function to run the coding assistant."""
-    print(f"{Fore.CYAN}🤖 Local LLM Coding Assistant 🤖{Style.RESET_ALL}")
-    print(f"{Fore.CYAN}================================{Style.RESET_ALL}")
-    print("Enter your coding questions and include file paths in square brackets.")
-    print("Example: How can I improve this code? [main.py]")
-    print()
-    print("For web searches, prefix with 'search:' or 'search ' - Example: search: Python requests library")
-    print("For file editing, prefix with 'edit:' or 'edit ' - Example: edit: [main.py] to fix the function")
-    print("For running commands, prefix with 'run:' or 'run ' - Example: run: the tests or run: 'python test.py'")
-    print("For changing models, prefix with 'model:' or 'model ' - Example: model: llama3 or model: codellama")
-    print("For creating new files, prefix with 'create:' or 'create ' - Example: create: [newfile.py]")
-    print("Include URLs in brackets - Example: How to use this API? [https://api.example.com/docs]")
-    print()
-    print("Special commands:")
-    print("  'thinking:on' or 'thinking:off' - Toggle display of AI thinking blocks")
-    print("  'thinking:length N' - Set maximum length of thinking blocks (N characters)")
-    print("  'exit' - Quit the assistant")
-    print()
-    
-    # Check Ollama connection
-    if not check_ollama_connection():
-        print("Exiting due to connection issues with Ollama.")
-        sys.exit(1)
-    
-    # Initialize conversation history
-    conversation_history = []
-    
-    # Display current model
-    print(f"Current model: {CURRENT_MODEL}")
-    print(f"Thinking display: {'ON' if SHOW_THINKING else 'OFF'}")
-    print(f"Maximum thinking length: {MAX_THINKING_LENGTH} characters")
-    print()
-    
-    while True:
-        # Get user input
-        user_input = input(f"\n{Fore.GREEN}> {Style.RESET_ALL}")
+    try:
+        print(f"{Fore.CYAN}🤖 Local LLM Coding Assistant 🤖{Style.RESET_ALL}")
+        print(f"{Fore.CYAN}================================{Style.RESET_ALL}")
+        print("Enter your coding questions and include file paths in square brackets.")
+        print("Example: How can I improve this code? [main.py]")
+        print()
+        print("For web searches, prefix with 'search:' or 'search ' - Example: search: Python requests library")
+        print("For file editing, prefix with 'edit:' or 'edit ' - Example: edit: [main.py] to fix the function")
+        print("For running commands, prefix with 'run:' or 'run ' - Example: run: the tests or run: 'python test.py'")
+        print("For changing models, prefix with 'model:' or 'model ' - Example: model: llama3 or model: codellama")
+        print("For creating new files, prefix with 'create:' or 'create ' - Example: create: [newfile.py]")
+        print("Include URLs in brackets - Example: How to use this API? [https://api.example.com/docs]")
+        print()
+        print("Special commands:")
+        print("  'thinking:on' or 'thinking:off' - Toggle display of AI thinking blocks")
+        print("  'thinking:length N' - Set maximum length of thinking blocks (N characters)")
+        print("  'exit' - Quit the assistant")
+        print()
         
-        # Check for exit command
-        if user_input.lower() in ['exit', 'quit']:
-            print("Goodbye! 👋")
-            break
-            
-        # Check for thinking display commands
-        if user_input.lower() in ['thinking:on', 'thinking on']:
-            toggle_thinking_display()
-            continue
-        elif user_input.lower() in ['thinking:off', 'thinking off']:
-            toggle_thinking_display()
-            continue
-        elif user_input.lower().startswith(('thinking:length ', 'thinking length ')):
-            parts = user_input.split()
-            if len(parts) >= 2:
+        # Check Ollama connection
+        if not check_ollama_connection():
+            print(f"{Fore.RED}Exiting due to connection issues with Ollama.{Style.RESET_ALL}")
+            print(f"{Fore.YELLOW}Please ensure Ollama is running and accessible.{Style.RESET_ALL}")
+            sys.exit(1)
+        
+        # Initialize conversation history
+        conversation_history = []
+        
+        # Display current model
+        print(f"Current model: {CURRENT_MODEL}")
+        print(f"Thinking display: {'ON' if SHOW_THINKING else 'OFF'}")
+        print(f"Maximum thinking length: {MAX_THINKING_LENGTH} characters")
+        print()
+        
+        while True:
+            try:
+                # Get user input
+                user_input = input(f"\n{Fore.GREEN}> {Style.RESET_ALL}")
+                
+                # Check for exit command
+                if user_input.lower() in ['exit', 'quit']:
+                    print("Goodbye! 👋")
+                    break
+                    
+                # Check for thinking display commands
+                if user_input.lower() in ['thinking:on', 'thinking on']:
+                    toggle_thinking_display()
+                    continue
+                elif user_input.lower() in ['thinking:off', 'thinking off']:
+                    toggle_thinking_display()
+                    continue
+                elif user_input.lower().startswith(('thinking:length ', 'thinking length ')):
+                    parts = user_input.split()
+                    if len(parts) >= 2:
+                        try:
+                            length = int(parts[-1])
+                            set_thinking_max_length(length)
+                        except ValueError:
+                            print(f"{Fore.YELLOW}Invalid length value. Please provide a number.{Style.RESET_ALL}")
+                    else:
+                        print(f"{Fore.YELLOW}Usage: thinking:length NUMBER{Style.RESET_ALL}")
+                    continue
+                
+                # Check query type
+                search_mode = is_search_query(user_input)
+                edit_mode = is_edit_query(user_input)
+                run_mode = is_run_query(user_input)
+                model_mode = is_model_query(user_input)
+                create_mode = is_create_query(user_input)
+                
+                # Handle different query types
                 try:
-                    length = int(parts[-1])
-                    set_thinking_max_length(length)
-                except ValueError:
-                    print(f"{Fore.YELLOW}Invalid length value. Please provide a number.{Style.RESET_ALL}")
-            else:
-                print(f"{Fore.YELLOW}Usage: thinking:length NUMBER{Style.RESET_ALL}")
-            continue
-        
-        # Check query type
-        search_mode = is_search_query(user_input)
-        edit_mode = is_edit_query(user_input)
-        run_mode = is_run_query(user_input)
-        model_mode = is_model_query(user_input)
-        create_mode = is_create_query(user_input)
-        
-        # Handle different query types
-        if search_mode:
-            handle_search_query(user_input, conversation_history)
-        elif edit_mode:
-            handle_edit_query(user_input, conversation_history)
-        elif run_mode:
-            handle_run_query(user_input, conversation_history)
-        elif model_mode:
-            handle_model_query(user_input, conversation_history)
-        elif create_mode:
-            handle_create_query(user_input, conversation_history)
-        else:
-            handle_regular_query(user_input, conversation_history)
+                    if search_mode:
+                        handle_search_query(user_input, conversation_history)
+                    elif edit_mode:
+                        handle_edit_query(user_input, conversation_history)
+                    elif run_mode:
+                        handle_run_query(user_input, conversation_history)
+                    elif model_mode:
+                        handle_model_query(user_input, conversation_history)
+                    elif create_mode:
+                        handle_create_query(user_input, conversation_history)
+                    else:
+                        handle_regular_query(user_input, conversation_history)
+                except Exception as e:
+                    error_type = type(e).__name__
+                    print(f"{Fore.RED}Error handling query: {error_type} - {str(e)}{Style.RESET_ALL}")
+                    print(f"{Fore.YELLOW}Please try again or rephrase your query.{Style.RESET_ALL}")
+                    # Log the error for debugging
+                    import traceback
+                    print(f"{Fore.RED}Error details:{Style.RESET_ALL}")
+                    traceback.print_exc()
+                    
+                    # Add error message to conversation history
+                    error_message = f"I encountered an error: {error_type} - {str(e)}. Please try again or rephrase your query."
+                    conversation_history.append({"role": "assistant", "content": error_message})
+            
+            except KeyboardInterrupt:
+                print(f"\n{Fore.YELLOW}Operation interrupted. Type 'exit' to quit or continue with a new query.{Style.RESET_ALL}")
+                continue
+            except EOFError:
+                print(f"\n{Fore.YELLOW}Input stream ended. Exiting...{Style.RESET_ALL}")
+                break
+            except Exception as e:
+                error_type = type(e).__name__
+                print(f"{Fore.RED}Unexpected error: {error_type} - {str(e)}{Style.RESET_ALL}")
+                print(f"{Fore.YELLOW}Please try again.{Style.RESET_ALL}")
+                # Log the error for debugging
+                import traceback
+                traceback.print_exc()
+                continue
+    
+    except Exception as e:
+        error_type = type(e).__name__
+        print(f"{Fore.RED}Critical error in main application: {error_type} - {str(e)}{Style.RESET_ALL}")
+        print(f"{Fore.RED}The application will now exit.{Style.RESET_ALL}")
+        # Log the error for debugging
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
 
 
 def handle_search_query(user_input, conversation_history):

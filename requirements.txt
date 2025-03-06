@@ -3,4 +3,5 @@ beautifulsoup4>=4.12.2
 lxml>=4.9.3
 colorama>=0.4.6
 pytest>=7.4.0
-pytest-mock>=3.11.1 
+pytest-mock>=3.11.1
+chardet>=5.0.0 
