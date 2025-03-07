@@ -36,4 +36,25 @@ def temp_file():
     with open(path, 'w') as f:
         f.write("Test content for file operations\nLine 2\nLine 3\n")
     yield path
-    os.unlink(path) 
+    os.unlink(path)
+
+@pytest.fixture
+def mock_timeout_responses():
+    """Fixture providing a collection of mock responses for testing timeout functionality."""
+    
+    # Save original timeout value
+    original_timeout = code_assistant.DEFAULT_TIMEOUT
+    
+    # Create various timeout values for testing
+    test_timeout_values = {
+        "valid": 120,
+        "negative": -10,
+        "zero": 0,
+        "string": "not_a_number",
+        "very_large": 9999
+    }
+    
+    yield test_timeout_values
+    
+    # Restore original timeout value
+    code_assistant.DEFAULT_TIMEOUT = original_timeout 

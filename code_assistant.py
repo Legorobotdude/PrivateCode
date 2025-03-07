@@ -53,6 +53,7 @@ MAX_SEARCH_RESULTS = 5      # Maximum number of search results to include
 MAX_URL_CONTENT_LENGTH = 10000  # Maximum characters to include from URL content
 SHOW_THINKING = False  # Default to hiding thinking blocks
 MAX_THINKING_LENGTH = 5000  # Maximum length of thinking block to display
+DEFAULT_TIMEOUT = 60  # Default timeout for LLM operations in seconds
 
 # Command execution safety
 SAFE_COMMAND_PREFIXES = ["python", "python3", "node", "npm", "git", "ls", "dir", "cd", "type", "cat", "make", "dotnet", "gradle", "mvn", "cargo", "rustc", "go", "test", "echo"]
@@ -935,10 +936,34 @@ def get_file_list():
         return []
 
 
-def get_ollama_response(history, model=None, timeout=60):
+def set_timeout(timeout):
+    """Set the timeout value for LLM operations.
+    
+    Args:
+        timeout: New timeout value in seconds
+        
+    Returns:
+        The updated timeout value
+    """
+    global DEFAULT_TIMEOUT
+    try:
+        timeout_value = int(timeout)
+        if timeout_value <= 0:
+            print(f"{Fore.YELLOW}Timeout must be a positive integer. Using current value of {DEFAULT_TIMEOUT}.{Style.RESET_ALL}")
+            return DEFAULT_TIMEOUT
+        DEFAULT_TIMEOUT = timeout_value
+        print(f"{Fore.GREEN}Timeout set to {DEFAULT_TIMEOUT} seconds.{Style.RESET_ALL}")
+        return DEFAULT_TIMEOUT
+    except ValueError:
+        print(f"{Fore.YELLOW}Invalid timeout value. Please provide a number.{Style.RESET_ALL}")
+        return DEFAULT_TIMEOUT
+
+
+def get_ollama_response(history, model=None, timeout=None):
     """Get a response from the Ollama API."""
     # Use the specified model or the current model
     model_to_use = model or CURRENT_MODEL
+    timeout_to_use = timeout or DEFAULT_TIMEOUT
     
     try:
         # Prepare the request payload
@@ -952,9 +977,9 @@ def get_ollama_response(history, model=None, timeout=60):
         
         try:
             # Send the request to Ollama with a timeout
-            response = requests.post(OLLAMA_API_URL, json=payload, timeout=timeout)
+            response = requests.post(OLLAMA_API_URL, json=payload, timeout=timeout_to_use)
         except requests.exceptions.Timeout:
-            error_msg = f"Request to Ollama API timed out after {timeout} seconds. The model might be taking too long to respond."
+            error_msg = f"Request to Ollama API timed out after {timeout_to_use} seconds. The model might be taking too long to respond."
             print(f"{Fore.RED}{error_msg}{Style.RESET_ALL}")
             print(f"{Fore.YELLOW}Try using a smaller model or simplifying your query.{Style.RESET_ALL}")
             return error_msg
@@ -1334,6 +1359,7 @@ def main():
         print("Special commands:")
         print("  'thinking:on' or 'thinking:off' - Toggle display of AI thinking blocks")
         print("  'thinking:length N' - Set maximum length of thinking blocks (N characters)")
+        print("  'timeout: N' - Set timeout for LLM operations (N seconds)")
         print("  'exit' - Quit the assistant")
         print()
         
@@ -1350,6 +1376,7 @@ def main():
         print(f"Current model: {CURRENT_MODEL}")
         print(f"Thinking display: {'ON' if SHOW_THINKING else 'OFF'}")
         print(f"Maximum thinking length: {MAX_THINKING_LENGTH} characters")
+        print(f"LLM timeout: {DEFAULT_TIMEOUT} seconds")
         print()
         
         while True:
@@ -1379,6 +1406,13 @@ def main():
                             print(f"{Fore.YELLOW}Invalid length value. Please provide a number.{Style.RESET_ALL}")
                     else:
                         print(f"{Fore.YELLOW}Usage: thinking:length NUMBER{Style.RESET_ALL}")
+                    continue
+                elif user_input.lower().startswith(('timeout:', 'timeout ')):
+                    parts = user_input.split()
+                    if len(parts) >= 2:
+                        set_timeout(parts[-1])
+                    else:
+                        print(f"{Fore.YELLOW}Usage: timeout: NUMBER{Style.RESET_ALL}")
                     continue
                 
                 # Check query type
