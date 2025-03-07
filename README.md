@@ -151,7 +151,14 @@ A terminal-based coding assistant that uses local Large Language Models (LLMs) v
    > thinking:length 2000
    ```
 
-11. Combine all features as needed:
+11. Adjust the timeout for LLM operations using the timeout command:
+   ```
+   > timeout:30
+   > timeout:60
+   ```
+   Users with slower hardware or those using larger models may need to increase the timeout value to prevent operations from being cut off prematurely.
+
+12. Combine all features as needed:
    ```
    > search: How to implement better error handling [search_test.py] [https://docs.python.org/3/library/]
    > What's wrong with this function? [buggy.py:25-50]
@@ -160,7 +167,7 @@ A terminal-based coding assistant that uses local Large Language Models (LLMs) v
    > create: [new_module.py]
    ```
 
-12. Type `exit` to quit the application.
+13. Type `exit` to quit the application.
 
 ## Thinking Blocks Feature
 
@@ -264,6 +271,7 @@ The assistant includes several safety measures:
 You can modify the default settings in the `code_assistant.py` file:
 
 - `DEFAULT_MODEL`: Change the default Ollama model
+- `DEFAULT_TIMEOUT`: Set the default timeout value for LLM operations (default: 30 seconds)
 - `MAX_SEARCH_RESULTS`: Adjust the number of search results included (default: 5)
 - `MAX_URL_CONTENT_LENGTH`: Limit the amount of content fetched from URLs (default: 10000 characters)
 - `SHOW_THINKING`: Control whether thinking blocks are shown (default: False)
