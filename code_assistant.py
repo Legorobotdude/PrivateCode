@@ -1388,6 +1388,39 @@ def main():
                 if user_input.lower() in ['exit', 'quit']:
                     print("Goodbye! 👋")
                     break
+                
+                # Check for help command
+                if user_input.lower() == 'help':
+                    print(f"\n{Fore.CYAN}🤖 Local LLM Coding Assistant - Help Menu 🤖{Style.RESET_ALL}")
+                    print(f"{Fore.CYAN}=========================================={Style.RESET_ALL}")
+                    
+                    print(f"\n{Fore.YELLOW}File Operations:{Style.RESET_ALL}")
+                    print("  create: [filename] - Create a new file")
+                    print("  edit: [filename] - Edit an existing file")
+                    
+                    print(f"\n{Fore.YELLOW}Execution:{Style.RESET_ALL}")
+                    print("  run: [command] - Execute a command")
+                    
+                    print(f"\n{Fore.YELLOW}Information:{Style.RESET_ALL}")
+                    print("  search: [query] - Search the web for information")
+                    
+                    print(f"\n{Fore.YELLOW}LLM Settings:{Style.RESET_ALL}")
+                    print("  model: [name] - Switch to a different model")
+                    print("  thinking:on/off - Toggle display of AI thinking blocks")
+                    print("  thinking:length [N] - Set maximum length of thinking blocks")
+                    print("  timeout: [N] - Set timeout for LLM operations (in seconds)")
+                    
+                    print(f"\n{Fore.YELLOW}Misc:{Style.RESET_ALL}")
+                    print("  help - Display this help menu")
+                    print("  exit - Quit the assistant")
+                    
+                    print(f"\n{Fore.CYAN}Examples:{Style.RESET_ALL}")
+                    print("  create: [script.py] with a function to calculate fibonacci")
+                    print("  edit: [main.py] to fix the bug in the login function")
+                    print("  run: python3 test.py")
+                    print("  search: how to use async/await in Python")
+                    print("  model: codellama")
+                    continue
                     
                 # Check for thinking display commands
                 if user_input.lower() in ['thinking:on', 'thinking on']:
