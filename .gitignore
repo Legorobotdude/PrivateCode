@@ -43,3 +43,4 @@ ENV/
 *.log
 logs/ 
 tests/C
+benchmark_results.json

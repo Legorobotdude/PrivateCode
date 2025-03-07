@@ -91,11 +91,12 @@ class BenchmarkResult:
 class Benchmarker:
     """Class to run benchmark tests on the coding assistant."""
     
-    def __init__(self, model="qwq"):
+    def __init__(self, model="qwq", timeout=60):
         self.model = model
         self.results = BenchmarkResult()
         self.temp_dir = tempfile.mkdtemp()
         self.use_real_llm = True  # Use real LLM by default
+        self.timeout = timeout  # Timeout for LLM operations in seconds
     
     def cleanup(self):
         """Clean up temporary resources."""
@@ -214,7 +215,7 @@ def better_function():
                 history = [
                     {"role": "user", "content": f"Fix this Python code by adding the missing colon after the parameter:\n\n{code_assistant.read_file_content(python_file)}"}
                 ]
-                response = code_assistant.get_ollama_response(history, model=self.model)
+                response = code_assistant.get_ollama_response(history, model=self.model, timeout=self.timeout)
                 modified = code_assistant.extract_modified_content(response, python_file)
                 # Check if the colon was added
                 assert "def hello(name):" in modified
@@ -227,7 +228,7 @@ def better_function():
                 history = [
                     {"role": "user", "content": f"Fix this JavaScript code by adding the missing closing brace and semicolon:\n\n{code_assistant.read_file_content(js_file)}"}
                 ]
-                response = code_assistant.get_ollama_response(history, model=self.model)
+                response = code_assistant.get_ollama_response(history, model=self.model, timeout=self.timeout)
                 modified = code_assistant.extract_modified_content(response, js_file)
                 # Check if the closing brace and semicolon were added
                 assert "return a + b;" in modified and "}" in modified
@@ -260,7 +261,7 @@ def better_function():
                 
                 def _test_python():
                     history = [{"role": "user", "content": f"What's wrong with this code?\n\n{code_assistant.read_file_content(python_file)}"}]
-                    response = code_assistant.get_ollama_response(history, model=self.model)
+                    response = code_assistant.get_ollama_response(history, model=self.model, timeout=self.timeout)
                     assert "division by zero" in response.lower()
                     return response
                 
@@ -273,7 +274,7 @@ def better_function():
                 
                 def _test_js():
                     history = [{"role": "user", "content": f"What's wrong with this code?\n\n{code_assistant.read_file_content(js_file)}"}]
-                    response = code_assistant.get_ollama_response(history, model=self.model)
+                    response = code_assistant.get_ollama_response(history, model=self.model, timeout=self.timeout)
                     assert "not defined" in response.lower()
                     return response
                 
@@ -282,7 +283,7 @@ def better_function():
             # Use real LLM calls
             def _test_python():
                 history = [{"role": "user", "content": f"What's wrong with this code?\n\n{code_assistant.read_file_content(python_file)}"}]
-                response = code_assistant.get_ollama_response(history, model=self.model)
+                response = code_assistant.get_ollama_response(history, model=self.model, timeout=self.timeout)
                 # More flexible assertion for real LLM responses
                 assert any(phrase in response.lower() for phrase in ["division by zero", "divide by zero", "denominator is zero", "zero division"])
                 return response
@@ -291,7 +292,7 @@ def better_function():
             
             def _test_js():
                 history = [{"role": "user", "content": f"What's wrong with this code?\n\n{code_assistant.read_file_content(js_file)}"}]
-                response = code_assistant.get_ollama_response(history, model=self.model)
+                response = code_assistant.get_ollama_response(history, model=self.model, timeout=self.timeout)
                 # More flexible assertion for real LLM responses
                 assert any(phrase in response.lower() for phrase in ["not defined", "undefined", "missing", "doesn't exist"])
                 return response
@@ -498,7 +499,7 @@ grep "search pattern" *.py
             partial_content = code_assistant.read_file_content(file_path, start_line, end_line)
             
             history = [{"role": "user", "content": f"What's wrong with this function?\n\n{partial_content}"}]
-            response = code_assistant.get_ollama_response(history, model=self.model)
+            response = code_assistant.get_ollama_response(history, model=self.model, timeout=self.timeout)
             
             # Check if the response identifies the division by zero issue
             assert response is not None
@@ -528,6 +529,7 @@ def main():
     parser.add_argument("--output", default="benchmark_results.json", help="Output file for results")
     parser.add_argument("--run-tests", action="store_true", help="Run pytest tests before benchmarking")
     parser.add_argument("--use-mocks", action="store_true", help="Use mock responses instead of real LLM calls")
+    parser.add_argument("--timeout", type=int, default=60, help="Timeout in seconds for LLM operations (default: 60)")
     args = parser.parse_args()
     
     if args.run_tests:
@@ -536,14 +538,14 @@ def main():
             return 1
     
     print(f"\nRunning benchmarks with model: {args.model}")
-    benchmarker = Benchmarker(model=args.model)
+    benchmarker = Benchmarker(model=args.model, timeout=args.timeout)
     
     # Set use_real_llm based on the use-mocks flag (inverted logic)
     benchmarker.use_real_llm = not args.use_mocks
     if args.use_mocks:
         print("Using mock responses for benchmarks (faster but less realistic)")
     else:
-        print("Using real LLM calls for benchmarks (this may take longer but provides more realistic results)")
+        print(f"Using real LLM calls for benchmarks with a timeout of {args.timeout} seconds")
     
     # Run the benchmarks
     results = benchmarker.run_benchmarks()

@@ -935,7 +935,7 @@ def get_file_list():
         return []
 
 
-def get_ollama_response(history, model=None):
+def get_ollama_response(history, model=None, timeout=60):
     """Get a response from the Ollama API."""
     # Use the specified model or the current model
     model_to_use = model or CURRENT_MODEL
@@ -952,9 +952,9 @@ def get_ollama_response(history, model=None):
         
         try:
             # Send the request to Ollama with a timeout
-            response = requests.post(OLLAMA_API_URL, json=payload, timeout=60)
+            response = requests.post(OLLAMA_API_URL, json=payload, timeout=timeout)
         except requests.exceptions.Timeout:
-            error_msg = f"Request to Ollama API timed out after 60 seconds. The model might be taking too long to respond."
+            error_msg = f"Request to Ollama API timed out after {timeout} seconds. The model might be taking too long to respond."
             print(f"{Fore.RED}{error_msg}{Style.RESET_ALL}")
             print(f"{Fore.YELLOW}Try using a smaller model or simplifying your query.{Style.RESET_ALL}")
             return error_msg
