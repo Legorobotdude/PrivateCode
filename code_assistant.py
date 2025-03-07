@@ -1210,6 +1210,24 @@ def clean_explanatory_text(content):
         if content.startswith(starter):
             content = content[len(starter):].strip()
             break
+
+     # Check for explanatory text at the end
+    explanation_enders = [
+        "This fixes the syntax error.",
+        "This adds the missing",
+        "This corrects the",
+        "The code now has",
+        "Now the code is syntactically correct.",
+        "This completes the function.",
+        "I've added the closing",
+        "I've added the semicolon",
+    ]
+    
+    for ender in explanation_enders:
+        if content.endswith(ender):
+            content = content[:content.rfind(ender)].strip()
+            break
+    
     
     # Remove thinking blocks
     content = process_thinking_blocks(content)

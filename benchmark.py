@@ -210,6 +210,27 @@ def better_function():
                 "function add(a, b) {\n    return a + b"  # Missing closing brace and semicolon
             )
             
+            # Create C# file with a simple bug
+            csharp_file = create_test_file(
+                self.temp_dir,
+                "buggy_csharp.cs",
+                "using System;\n\nclass Program {\n    static void Main() {\n        Console.WriteLine(\"Hello, World!\"\n    }\n}"  # Missing closing parenthesis
+            )
+            
+            # Create C++ file with a simple bug
+            cpp_file = create_test_file(
+                self.temp_dir,
+                "buggy_cpp.cpp",
+                "#include <iostream>\n\nint main() {\n    std::cout << \"Hello, World!\";\n    return 0"  # Missing semicolon after return statement
+            )
+            
+            # Create HTML file with a simple bug
+            html_file = create_test_file(
+                self.temp_dir,
+                "buggy_html.html",
+                "<!DOCTYPE html>\n<html>\n<head>\n    <title>Test Page</title>\n</head>\n<body>\n    <h1>Hello, World!</h1>\n    <p>This is a test page.<p>\n</body>\n</html>"  # Missing closing </p> tag
+            )
+            
             # Test Python file fix
             def _test_python_fix():
                 history = [
@@ -225,16 +246,171 @@ def better_function():
             
             # Test JavaScript file fix
             def _test_js_fix():
-                history = [
-                    {"role": "user", "content": f"Fix this JavaScript code by adding the missing closing brace and semicolon:\n\n{code_assistant.read_file_content(js_file)}"}
-                ]
-                response = code_assistant.get_ollama_response(history, model=self.model, timeout=self.timeout)
-                modified = code_assistant.extract_modified_content(response, js_file)
-                # Check if the closing brace and semicolon were added
-                assert "return a + b;" in modified and "}" in modified
-                return modified
+                try:
+                    history = [
+                        {"role": "user", "content": f"Fix this JavaScript code by adding the missing closing brace and semicolon:\n\n{code_assistant.read_file_content(js_file)}"}
+                    ]
+                    response = code_assistant.get_ollama_response(history, model=self.model, timeout=self.timeout)
+                    
+                    # If we got an error response due to timeout, try a simpler prompt
+                    if "timeout" in response.lower():
+                        print("Retrying with a simpler prompt...")
+                        history = [
+                            {"role": "user", "content": f"Add the missing closing brace and semicolon to this JavaScript code:\n\nfunction add(a, b) {{\n    return a + b"}
+                        ]
+                        response = code_assistant.get_ollama_response(history, model=self.model, timeout=self.timeout)
+                    
+                    modified = code_assistant.extract_modified_content(response, js_file)
+                    
+                    # If extraction failed, try a manual approach
+                    if not modified and response:
+                        print("Extraction failed, trying manual approach...")
+                        # Look for code between backticks
+                        if "```" in response:
+                            code_blocks = response.split("```")
+                            if len(code_blocks) > 1:
+                                code = code_blocks[1].strip()
+                                if code.startswith("javascript") or code.startswith("js"):
+                                    code = "\n".join(code.split("\n")[1:])
+                                modified = code
+                    
+                    # Check if the closing brace and semicolon were added
+                    if modified:
+                        assert "return a + b;" in modified and "}" in modified
+                    else:
+                        raise Exception("Failed to extract valid JavaScript code")
+                    return modified
+                except Exception as e:
+                    print(f"Error in JavaScript test: {e}")
+                    raise  # Re-raise the exception instead of returning False
             
             self._time_execution("file_editing", "Fix JavaScript syntax (real LLM)", _test_js_fix)
+            
+            # Test C# file fix
+            def _test_csharp_fix():
+                try:
+                    history = [
+                        {"role": "user", "content": f"Fix this C# code by adding the missing closing parenthesis:\n\n{code_assistant.read_file_content(csharp_file)}"}
+                    ]
+                    response = code_assistant.get_ollama_response(history, model=self.model)
+                    
+                    # If we got an error response due to timeout, try a simpler prompt
+                    if "timeout" in response.lower():
+                        print("Retrying with a simpler prompt...")
+                        history = [
+                            {"role": "user", "content": "Add the missing closing parenthesis to this C# code:\n\nusing System;\n\nclass Program {\n    static void Main() {\n        Console.WriteLine(\"Hello, World!\");\n    }\n}"}
+                        ]
+                        response = code_assistant.get_ollama_response(history, model=self.model)
+                    
+                    modified = code_assistant.extract_modified_content(response, csharp_file)
+                    
+                    # If extraction failed, try a manual approach
+                    if not modified and response:
+                        print("Extraction failed, trying manual approach...")
+                        # Look for code between backticks
+                        if "```" in response:
+                            code_blocks = response.split("```")
+                            if len(code_blocks) > 1:
+                                code = code_blocks[1].strip()
+                                if code.startswith("csharp") or code.startswith("cs"):
+                                    code = "\n".join(code.split("\n")[1:])
+                                modified = code
+                    
+                    # Check if the closing parenthesis was added
+                    if modified:
+                        assert "Console.WriteLine(\"Hello, World!\");" in modified
+                    else:
+                        raise Exception("Failed to extract valid C# code")
+                    return modified
+                except Exception as e:
+                    print(f"Error in C# test: {e}")
+                    raise  # Re-raise the exception instead of returning False
+            
+            self._time_execution("file_editing", "Fix C# syntax (real LLM)", _test_csharp_fix)
+            
+            # Test C++ file fix
+            def _test_cpp_fix():
+                try:
+                    history = [
+                        {"role": "user", "content": f"Fix this C++ code by adding the missing semicolon after the return statement:\n\n{code_assistant.read_file_content(cpp_file)}"}
+                    ]
+                    response = code_assistant.get_ollama_response(history, model=self.model)
+                    
+                    # If we got an error response due to timeout, try a simpler prompt
+                    if "timeout" in response.lower():
+                        print("Retrying with a simpler prompt...")
+                        history = [
+                            {"role": "user", "content": "Add the missing semicolon after the return statement in this C++ code:\n\n#include <iostream>\n\nint main() {\n    std::cout << \"Hello, World!\";\n    return 0\n}"}
+                        ]
+                        response = code_assistant.get_ollama_response(history, model=self.model)
+                    
+                    modified = code_assistant.extract_modified_content(response, cpp_file)
+                    
+                    # If extraction failed, try a manual approach
+                    if not modified and response:
+                        print("Extraction failed, trying manual approach...")
+                        # Look for code between backticks
+                        if "```" in response:
+                            code_blocks = response.split("```")
+                            if len(code_blocks) > 1:
+                                code = code_blocks[1].strip()
+                                if code.startswith("cpp") or code.startswith("c++"):
+                                    code = "\n".join(code.split("\n")[1:])
+                                modified = code
+                    
+                    # Check if the semicolon was added
+                    if modified:
+                        assert "return 0;" in modified
+                    else:
+                        raise Exception("Failed to extract valid C++ code")
+                    return modified
+                except Exception as e:
+                    print(f"Error in C++ test: {e}")
+                    raise  # Re-raise the exception instead of returning False
+            
+            self._time_execution("file_editing", "Fix C++ syntax (real LLM)", _test_cpp_fix)
+            
+            # Test HTML file fix
+            def _test_html_fix():
+                try:
+                    history = [
+                        {"role": "user", "content": f"Fix this HTML code by adding the missing closing </p> tag:\n\n{code_assistant.read_file_content(html_file)}"}
+                    ]
+                    response = code_assistant.get_ollama_response(history, model=self.model)
+                    
+                    # If we got an error response due to timeout, try a simpler prompt
+                    if "timeout" in response.lower():
+                        print("Retrying with a simpler prompt...")
+                        history = [
+                            {"role": "user", "content": "Add the missing closing </p> tag to this HTML code:\n\n<!DOCTYPE html>\n<html>\n<head>\n    <title>Test Page</title>\n</head>\n<body>\n    <h1>Hello, World!</h1>\n    <p>This is a test page.<p>\n</body>\n</html>"}
+                        ]
+                        response = code_assistant.get_ollama_response(history, model=self.model)
+                    
+                    modified = code_assistant.extract_modified_content(response, html_file)
+                    
+                    # If extraction failed, try a manual approach
+                    if not modified and response:
+                        print("Extraction failed, trying manual approach...")
+                        # Look for code between backticks
+                        if "```" in response:
+                            code_blocks = response.split("```")
+                            if len(code_blocks) > 1:
+                                code = code_blocks[1].strip()
+                                if code.startswith("html"):
+                                    code = "\n".join(code.split("\n")[1:])
+                                modified = code
+                    
+                    # Check if the closing tag was added
+                    if modified:
+                        assert "<p>This is a test page.</p>" in modified
+                    else:
+                        raise Exception("Failed to extract valid HTML code")
+                    return modified
+                except Exception as e:
+                    print(f"Error in HTML test: {e}")
+                    raise  # Re-raise the exception instead of returning False
+            
+            self._time_execution("file_editing", "Fix HTML syntax (real LLM)", _test_html_fix)
     
     def _run_code_analysis_tests(self):
         """Run tests for code analysis functionality."""
