@@ -17,13 +17,14 @@ A terminal-based coding assistant that uses local Large Language Models (LLMs) v
 - Persistent conversation history
 - Locally hosted LLM (no data sent to external services)
 - AI thinking blocks with configurable display options
+- Project planning with step-by-step execution (plan/vibecode feature)
 
 ## Prerequisites
 
 - Python 3.6+
 - [Ollama](https://ollama.ai/) installed and running locally
 - A code LLM model pulled in Ollama (e.g., codellama, llama2, mixtral)
-- Internet connection (for web search functionality)
+- (optional) Internet connection (for web search functionality)
 
 ## Installation
 
@@ -128,7 +129,6 @@ A terminal-based coding assistant that uses local Large Language Models (LLMs) v
    You can include file context to help the LLM suggest more appropriate commands:
    ```
    > run: [main.py] to test this script
-   > run: [test_file.py] [main.py] to run tests on the main file
    ```
    
    You can also specify line ranges to focus on specific parts of files:
@@ -155,6 +155,7 @@ A terminal-based coding assistant that uses local Large Language Models (LLMs) v
    ```
    > timeout:30
    > timeout:60
+   > timeout:500
    ```
    Users with slower hardware or those using larger models may need to increase the timeout value to prevent operations from being cut off prematurely.
 
@@ -167,7 +168,14 @@ A terminal-based coding assistant that uses local Large Language Models (LLMs) v
    > create: [new_module.py]
    ```
 
-13. Type `exit` to quit the application.
+13. Use project planning for complex tasks:
+   ```
+   > plan: Create a Flask API with endpoints for user authentication
+   > plan: Add unit tests for [app.py] functions
+   > vibecode: Refactor the database connection in [db.py] to use connection pooling
+   ```
+
+14. Type `exit` to quit the application.
 
 ## Thinking Blocks Feature
 
@@ -271,11 +279,11 @@ The assistant includes several safety measures:
 You can modify the default settings in the `code_assistant.py` file:
 
 - `DEFAULT_MODEL`: Change the default Ollama model
-- `DEFAULT_TIMEOUT`: Set the default timeout value for LLM operations (default: 30 seconds)
 - `MAX_SEARCH_RESULTS`: Adjust the number of search results included (default: 5)
 - `MAX_URL_CONTENT_LENGTH`: Limit the amount of content fetched from URLs (default: 10000 characters)
 - `SHOW_THINKING`: Control whether thinking blocks are shown (default: False)
 - `MAX_THINKING_LENGTH`: Set the maximum length of thinking blocks (default: 5000 characters)
+- `DEFAULT_TIMEOUT`: Set the default timeout value for LLM operations (default: 500 seconds)
 - `SAFE_COMMAND_PREFIXES`: List of command prefixes considered safe to execute
 - `DANGEROUS_COMMANDS`: List of potentially dangerous command elements that trigger warnings
 
@@ -289,6 +297,7 @@ You can modify the default settings in the `code_assistant.py` file:
 - Command suggestions are based on your description and the files in your directory.
 - Thinking blocks are hidden by default but can be shown with the `thinking:on` command.
 - Partial file reading allows you to focus the LLM on specific parts of a file, which can help reduce token usage and get more targeted responses.
+- The default timeout for LLM operations is 500 seconds, which can be adjusted using the `timeout:N` command if you're experiencing timeouts with larger models or complex queries.
 
 ## Privacy Considerations
 
@@ -409,3 +418,35 @@ The Run functionality includes several safety measures:
 - Potentially dangerous commands trigger extra safety warnings with specific reasons
 - All commands require explicit user confirmation before execution
 - Command output is displayed and added to the conversation history
+
+## Plan/Vibecode Feature
+
+The Plan/Vibecode feature allows you to create and execute project plans with the LLM. This is useful for breaking down complex tasks into smaller, executable steps.
+
+### Usage
+
+To create and execute a project plan, use the `plan:` or `vibecode:` prefix followed by a description of the plan:
+
+```
+> plan: Create a simple Python script that prints 'Hello, World!' and run it to verify
+> vibecode: Build a basic web server with Node.js and Express
+```
+
+The LLM will break down your request into executable steps in a standardized JSON format. These steps can include:
+- Creating files
+- Writing code to files
+- Editing existing files
+- Running commands
+- Verifying command outputs
+
+Each step is displayed and requires confirmation before execution, giving you full control over the process.
+
+You can include file context to help the LLM understand the existing code:
+```
+> plan: Add more error handling to this API endpoint [api.py]
+```
+
+The plan will be executed interactively, allowing you to:
+- Review each step before execution
+- Skip steps you don't want to execute
+- Save the plan to a JSON file for later use
