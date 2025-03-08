@@ -53,7 +53,7 @@ MAX_SEARCH_RESULTS = 5      # Maximum number of search results to include
 MAX_URL_CONTENT_LENGTH = 10000  # Maximum characters to include from URL content
 SHOW_THINKING = False  # Default to hiding thinking blocks
 MAX_THINKING_LENGTH = 5000  # Maximum length of thinking block to display
-DEFAULT_TIMEOUT = 60  # Default timeout for LLM operations in seconds
+DEFAULT_TIMEOUT = 500  # Default timeout for LLM operations in seconds
 WORKING_DIRECTORY = None  # Working directory for file operations
 
 # Command execution safety
@@ -1334,8 +1334,11 @@ def process_thinking_blocks(content):
         # Truncate if too long
         if len(thinking_content) > MAX_THINKING_LENGTH:
             truncated = thinking_content[:MAX_THINKING_LENGTH] + f"\n... [Thinking truncated, {len(thinking_content) - MAX_THINKING_LENGTH} more characters] ..."
+            # Use <thinking> tags for truncated blocks to match the test expectations
             result = result[:start] + f"<thinking>\n{truncated}\n</thinking>" + result[end:]
+        # Otherwise, we keep the original <think> tags
     
+    # The result should maintain the <think> tags when SHOW_THINKING is true
     return result
 
 
@@ -1426,7 +1429,7 @@ def extract_suggested_command(response):
 
 def main():
     """Main function to run the coding assistant."""
-    global WORKING_DIRECTORY
+    global WORKING_DIRECTORY, SHOW_THINKING
     
     try:
         print(f"{Fore.CYAN}🤖 Local LLM Coding Assistant 🤖{Style.RESET_ALL}")
@@ -1491,116 +1494,111 @@ def main():
         print(f"LLM timeout: {DEFAULT_TIMEOUT} seconds")
         print()
         
+        # Main chat loop
         while True:
-            try:
-                # Get user input
-                user_input = input(f"\n{Fore.GREEN}> {Style.RESET_ALL}")
-                
-                # Check for exit command
-                if user_input.lower() in ['exit', 'quit']:
-                    print("Goodbye! 👋")
-                    break
-                
-                # Check for help command
-                if user_input.lower() == 'help':
-                    print(f"\n{Fore.CYAN}🤖 Local LLM Coding Assistant - Help Menu 🤖{Style.RESET_ALL}")
-                    print(f"{Fore.CYAN}=========================================={Style.RESET_ALL}")
-                    
-                    print(f"\n{Fore.YELLOW}File Operations:{Style.RESET_ALL}")
-                    print("  create: [path] - Create a new file")
-                    print("  edit: [path] - Edit an existing file")
-                    
-                    print(f"\n{Fore.YELLOW}Execution:{Style.RESET_ALL}")
-                    print("  run: [command] - Execute a command")
-                    
-                    print(f"\n{Fore.YELLOW}Information:{Style.RESET_ALL}")
-                    print("  search: [query] - Search the web for information")
-                    
-                    print(f"\n{Fore.YELLOW}Project Planning:{Style.RESET_ALL}")
-                    print("  plan: [description] - Generate and execute a plan of steps for a project")
-                    
-                    print(f"\n{Fore.YELLOW}LLM Settings:{Style.RESET_ALL}")
-                    print("  model: [name] - Switch to a different model")
-                    print("  thinking:on/off - Toggle display of AI thinking blocks")
-                    print("  thinking:length [N] - Set maximum length of thinking blocks")
-                    print("  timeout: [N] - Set timeout for LLM operations (in seconds)")
-                    
-                    print(f"\n{Fore.YELLOW}Misc:{Style.RESET_ALL}")
-                    print("  help - Display this help menu")
-                    print("  exit - Quit the assistant")
-                    
-                    print(f"\n{Fore.CYAN}Examples:{Style.RESET_ALL}")
-                    print("  create: [script.py] with a function to calculate fibonacci")
-                    print("  edit: [main.py] to fix the bug in the login function")
-                    print("  run: python3 test.py")
-                    print("  search: how to use async/await in Python")
-                    print("  plan: Create a simple Python script that prints 'Hello, World!' and run it to verify")
-                    print("  model: codellama")
-                    continue
-                    
-                # Check for thinking display commands
-                if user_input.lower() in ['thinking:on', 'thinking on']:
-                    toggle_thinking_display()
-                    continue
-                elif user_input.lower() in ['thinking:off', 'thinking off']:
-                    toggle_thinking_display()
-                    continue
-                elif user_input.lower().startswith(('thinking:length ', 'thinking length ')):
-                    parts = user_input.split()
-                    if len(parts) >= 2:
-                        try:
-                            length = int(parts[-1])
-                            set_thinking_max_length(length)
-                        except ValueError:
-                            print(f"{Fore.YELLOW}Invalid length value. Please provide a number.{Style.RESET_ALL}")
-                    else:
-                        print(f"{Fore.YELLOW}Usage: thinking:length NUMBER{Style.RESET_ALL}")
-                    continue
-                elif user_input.lower().startswith(('timeout:', 'timeout ')):
-                    parts = user_input.split()
-                    if len(parts) >= 2:
-                        set_timeout(parts[-1])
-                    else:
-                        print(f"{Fore.YELLOW}Usage: timeout: NUMBER{Style.RESET_ALL}")
-                    continue
-                
-                # Check query type
-                search_mode = is_search_query(user_input)
-                edit_mode = is_edit_query(user_input)
-                run_mode = is_run_query(user_input)
-                model_mode = is_model_query(user_input)
-                create_mode = is_create_query(user_input)
-                plan_mode = is_plan_query(user_input)
-                
-                # Handle different query types
-                try:
-                    if search_mode:
-                        handle_search_query(user_input, conversation_history)
-                    elif edit_mode:
-                        handle_edit_query(user_input, conversation_history)
-                    elif run_mode:
-                        handle_run_query(user_input, conversation_history)
-                    elif model_mode:
-                        handle_model_query(user_input, conversation_history)
-                    elif create_mode:
-                        handle_create_query(user_input, conversation_history)
-                    elif plan_mode:
-                        handle_plan_query(user_input, conversation_history)
-                    else:
-                        handle_regular_query(user_input, conversation_history)
-                except Exception as e:
-                    error_type = type(e).__name__
-                    print(f"{Fore.RED}Error handling query: {error_type} - {str(e)}{Style.RESET_ALL}")
-                    print(f"{Fore.YELLOW}Please try again or rephrase your query.{Style.RESET_ALL}")
-                    # Log the error for debugging
-                    import traceback
-                    print(f"{Fore.RED}Error details:{Style.RESET_ALL}")
-                    traceback.print_exc()
-                    
-                    # Add error message to conversation history
-                    error_message = f"I encountered an error: {error_type} - {str(e)}. Please try again or rephrase your query."
-                    conversation_history.append({"role": "assistant", "content": error_message})
+            # Get user input
+            user_input = input(f"{Fore.YELLOW}> {Style.RESET_ALL}").strip()
             
+            if not user_input:
+                continue
+                
+            # Exit commands
+            if user_input.lower() in ['exit', 'quit', 'bye', ':q']:
+                break
+                
+            # Help command
+            if user_input.lower() in ['help', '?']:
+                print(f"{Fore.CYAN}Available commands:{Style.RESET_ALL}")
+                print("  exit: Exit the program")
+                print("  help: Show this help message")
+                print("  clear: Clear the terminal")
+                print("  reset: Reset the conversation history")
+                print("  files: Show a list of files in the current directory")
+                print("  create: Create a new file")
+                print("  edit: Edit a file")
+                print("  run: Run a command or script")
+                print("  model: Set or view the current model")
+                print("  thinking:on/off: Toggle showing thinking blocks")
+                print("  thinking:length: Set the max length for thinking blocks")
+                print("  timeout:set: Set the timeout for API requests")
+                print("  timeout:clear: Clear the timeout setting")
+                print()
+                print(f"{Fore.CYAN}Example queries:{Style.RESET_ALL}")
+                print("  create: a simple Python script to calculate Fibonacci numbers")
+                print("  edit: test.py to add error handling")
+                print("  run: python3 test.py")
+                print("  search: how to use async/await in Python")
+                print("  plan: Create a simple Python script that prints 'Hello, World!' and run it to verify")
+                print("  model: codellama")
+                continue
+                
+            # Check for thinking display commands
+            if user_input.lower() in ['thinking:on', 'thinking on']:
+                # Directly set to ON instead of toggling
+                SHOW_THINKING = True
+                print(f"{Fore.CYAN}Thinking display is now ON{Style.RESET_ALL}")
+                continue
+            elif user_input.lower() in ['thinking:off', 'thinking off']:
+                # Directly set to OFF instead of toggling
+                SHOW_THINKING = False
+                print(f"{Fore.CYAN}Thinking display is now OFF{Style.RESET_ALL}")
+                continue
+            elif user_input.lower().startswith(('thinking:length ', 'thinking length ')):
+                parts = user_input.split()
+                if len(parts) >= 2:
+                    try:
+                        length = int(parts[-1])
+                        set_thinking_max_length(length)
+                    except ValueError:
+                        print(f"{Fore.YELLOW}Invalid length value. Please provide a number.{Style.RESET_ALL}")
+                else:
+                    print(f"{Fore.YELLOW}Usage: thinking:length NUMBER{Style.RESET_ALL}")
+                continue
+            elif user_input.lower().startswith(('timeout:', 'timeout ')):
+                parts = user_input.split()
+                if len(parts) >= 2:
+                    set_timeout(parts[-1])
+                else:
+                    print(f"{Fore.YELLOW}Usage: timeout: NUMBER{Style.RESET_ALL}")
+                continue
+            
+            # Check query type
+            search_mode = is_search_query(user_input)
+            edit_mode = is_edit_query(user_input)
+            run_mode = is_run_query(user_input)
+            model_mode = is_model_query(user_input)
+            create_mode = is_create_query(user_input)
+            plan_mode = is_plan_query(user_input)
+            
+            # Handle different query types
+            try:
+                if search_mode:
+                    handle_search_query(user_input, conversation_history)
+                elif edit_mode:
+                    handle_edit_query(user_input, conversation_history)
+                elif run_mode:
+                    handle_run_query(user_input, conversation_history)
+                elif model_mode:
+                    handle_model_query(user_input, conversation_history)
+                elif create_mode:
+                    handle_create_query(user_input, conversation_history)
+                elif plan_mode:
+                    handle_plan_query(user_input, conversation_history)
+                else:
+                    handle_regular_query(user_input, conversation_history)
+            except Exception as e:
+                error_type = type(e).__name__
+                print(f"{Fore.RED}Error handling query: {error_type} - {str(e)}{Style.RESET_ALL}")
+                print(f"{Fore.YELLOW}Please try again or rephrase your query.{Style.RESET_ALL}")
+                # Log the error for debugging
+                import traceback
+                print(f"{Fore.RED}Error details:{Style.RESET_ALL}")
+                traceback.print_exc()
+                
+                # Add error message to conversation history
+                error_message = f"I encountered an error: {error_type} - {str(e)}. Please try again or rephrase your query."
+                conversation_history.append({"role": "assistant", "content": error_message})
+        
             except KeyboardInterrupt:
                 print(f"\n{Fore.YELLOW}Operation interrupted. Type 'exit' to quit or continue with a new query.{Style.RESET_ALL}")
                 continue
@@ -2196,6 +2194,10 @@ ONLY return a valid parseable JSON array of steps, for example:
         print(f"{Fore.RED}Failed to get a plan from the model.{Style.RESET_ALL}")
         return
     
+    # Process thinking blocks for display
+    processed_response = process_thinking_blocks(response)
+    print(f"{Fore.GREEN}{processed_response}{Style.RESET_ALL}")
+    
     # Add the assistant's response to the conversation history
     conversation_history.append({"role": "assistant", "content": response})
     
@@ -2207,22 +2209,26 @@ ONLY return a valid parseable JSON array of steps, for example:
         # Clean the response from thinking blocks and other non-JSON artifacts
         import re
         
+        # Create a copy of the response for JSON extraction
+        # This way we preserve the original response with thinking blocks
+        json_extraction_response = response
+        
         # Remove thinking blocks
-        cleaned_response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL)
+        json_extraction_response = re.sub(r'<think>.*?</think>', '', json_extraction_response, flags=re.DOTALL)
         # Remove standalone think tags
-        cleaned_response = re.sub(r'</think>', '', cleaned_response)
-        cleaned_response = re.sub(r'<think>', '', cleaned_response)
+        json_extraction_response = re.sub(r'</think>', '', json_extraction_response)
+        json_extraction_response = re.sub(r'<think>', '', json_extraction_response)
         
         # Remove common text artifacts
-        cleaned_response = re.sub(r'```.*?```', '', cleaned_response, flags=re.DOTALL)
-        cleaned_response = re.sub(r'Here is the JSON array:|Here are the steps:|Steps:', '', cleaned_response)
+        json_extraction_response = re.sub(r'```.*?```', '', json_extraction_response, flags=re.DOTALL)
+        json_extraction_response = re.sub(r'Here is the JSON array:|Here are the steps:|Steps:', '', json_extraction_response)
         
         # Find JSON in the cleaned response
-        json_start = cleaned_response.find("[")
-        json_end = cleaned_response.rfind("]") + 1
+        json_start = json_extraction_response.find("[")
+        json_end = json_extraction_response.rfind("]") + 1
         
         if json_start >= 0 and json_end > json_start:
-            json_str = cleaned_response[json_start:json_end]
+            json_str = json_extraction_response[json_start:json_end]
             
             # Try to fix common JSON syntax errors before parsing
             # Fix missing quotes before keys
@@ -2269,6 +2275,10 @@ ONLY return a valid parseable JSON array of steps, for example:
             print(f"{Fore.RED}Failed to get a plan from the model on retry.{Style.RESET_ALL}")
             return
         
+        # Process thinking blocks for display
+        processed_response = process_thinking_blocks(response)
+        print(f"{Fore.GREEN}{processed_response}{Style.RESET_ALL}")
+        
         # Add the assistant's retry response to the conversation history
         conversation_history.append({"role": "assistant", "content": response})
         
@@ -2276,22 +2286,26 @@ ONLY return a valid parseable JSON array of steps, for example:
             # For the retry, use the same cleaning and parsing logic
             import re
             
+            # Create a copy of the response for JSON extraction
+            # This way we preserve the original response with thinking blocks
+            json_extraction_response = response
+            
             # Remove thinking blocks
-            cleaned_response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL)
+            json_extraction_response = re.sub(r'<think>.*?</think>', '', json_extraction_response, flags=re.DOTALL)
             # Remove standalone think tags
-            cleaned_response = re.sub(r'</think>', '', cleaned_response)
-            cleaned_response = re.sub(r'<think>', '', cleaned_response)
+            json_extraction_response = re.sub(r'</think>', '', json_extraction_response)
+            json_extraction_response = re.sub(r'<think>', '', json_extraction_response)
             
             # Remove common text artifacts
-            cleaned_response = re.sub(r'```.*?```', '', cleaned_response, flags=re.DOTALL)
-            cleaned_response = re.sub(r'Here is the JSON array:|Here are the steps:|Steps:', '', cleaned_response)
+            json_extraction_response = re.sub(r'```.*?```', '', json_extraction_response, flags=re.DOTALL)
+            json_extraction_response = re.sub(r'Here is the JSON array:|Here are the steps:|Steps:', '', json_extraction_response)
             
             # Find the first [ and last ] in the cleaned response
-            json_start = cleaned_response.find("[")
-            json_end = cleaned_response.rfind("]") + 1
+            json_start = json_extraction_response.find("[")
+            json_end = json_extraction_response.rfind("]") + 1
             
             if json_start >= 0 and json_end > json_start:
-                json_str = cleaned_response[json_start:json_end]
+                json_str = json_extraction_response[json_start:json_end]
                 
                 # Try to fix common JSON syntax errors before parsing
                 # Fix missing quotes before keys
