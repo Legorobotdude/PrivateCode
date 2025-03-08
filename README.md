@@ -1,4 +1,4 @@
-# Local LLM Coding Assistant
+# Vibecoder.gg (Local LLM Coding Assistant)
 
 A terminal-based coding assistant that uses local Large Language Models (LLMs) via Ollama to provide coding help and answer programming questions. The assistant can also search the web for information while maintaining privacy, edit files, and execute commands with user confirmation.
 
