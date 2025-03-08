@@ -1418,8 +1418,8 @@ def main():
         print(f"{Fore.CYAN}================================{Style.RESET_ALL}")
         
         # Setup working directory
-        default_dir = os.path.join(os.path.expanduser("~"), "llm_assistant_workspace")
-        working_dir = input(f"{Fore.GREEN}Enter working directory path (default: {default_dir}): {Style.RESET_ALL}")
+        default_dir = os.getcwd()  # Use current directory as default
+        working_dir = input(f"{Fore.GREEN}Enter working directory path (default: current directory): {Style.RESET_ALL}")
         
         # Use default if nothing is entered
         if not working_dir.strip():
