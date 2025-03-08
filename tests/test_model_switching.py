@@ -81,6 +81,9 @@ class TestModelSwitching:
             conversation_history = []
             user_input = "model: test_model"
             
+            # Mock input to return 'y' to any confirmation prompts
+            mock_input.return_value = 'y'
+            
             # Call the function
             code_assistant.handle_model_query(user_input, conversation_history)
             
@@ -107,6 +110,9 @@ class TestModelSwitching:
             # Set up test
             conversation_history = []
             user_input = "model: 'quoted_test_model'"
+            
+            # Mock input to return 'y' to any confirmation prompts
+            mock_input.return_value = 'y'
             
             # Call the function
             code_assistant.handle_model_query(user_input, conversation_history)
@@ -142,8 +148,9 @@ class TestModelSwitching:
             }
             mock_get.return_value = mock_response
             
-            # Mock user input to select a model
-            mock_input.return_value = "model2"
+            # Mock user input for both model selection and confirmation
+            # First call returns the model selection, second call returns the confirmation
+            mock_input.side_effect = ["model2", "y"]
             
             # Call the function
             code_assistant.handle_model_query(user_input, conversation_history)

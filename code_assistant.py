@@ -54,6 +54,7 @@ MAX_URL_CONTENT_LENGTH = 10000  # Maximum characters to include from URL content
 SHOW_THINKING = False  # Default to hiding thinking blocks
 MAX_THINKING_LENGTH = 5000  # Maximum length of thinking block to display
 DEFAULT_TIMEOUT = 60  # Default timeout for LLM operations in seconds
+WORKING_DIRECTORY = None  # Working directory for file operations
 
 # Command execution safety
 SAFE_COMMAND_PREFIXES = ["python", "python3", "node", "npm", "git", "ls", "dir", "cd", "type", "cat", "make", "dotnet", "gradle", "mvn", "cargo", "rustc", "go", "test", "echo"]
@@ -194,6 +195,16 @@ def read_file_content(file_path, start_line=None, end_line=None):
         str: File content or None if file not found or error occurs
     """
     try:
+        # Ensure the file path is within the working directory if set
+        if WORKING_DIRECTORY and not os.path.isabs(file_path):
+            file_path = os.path.join(WORKING_DIRECTORY, file_path)
+        elif WORKING_DIRECTORY and os.path.isabs(file_path):
+            # Check if the absolute path is within the working directory
+            if not os.path.abspath(file_path).startswith(WORKING_DIRECTORY):
+                error_msg = f"Error: File '{file_path}' is outside the working directory. Access denied."
+                print(f"{Fore.RED}{error_msg}{Style.RESET_ALL}")
+                return None
+                
         # Check if file exists
         if not os.path.exists(file_path):
             error_msg = f"Error: File '{file_path}' not found."
@@ -314,6 +325,22 @@ def read_file_content(file_path, start_line=None, end_line=None):
 def write_file_content(file_path, content, create_backup=True):
     """Write content to a file, preserving the original encoding."""
     try:
+        # Ensure the file path is within the working directory if set
+        if WORKING_DIRECTORY and not os.path.isabs(file_path):
+            file_path = os.path.join(WORKING_DIRECTORY, file_path)
+        elif WORKING_DIRECTORY and os.path.isabs(file_path):
+            # Check if the absolute path is within the working directory
+            if not os.path.abspath(file_path).startswith(WORKING_DIRECTORY):
+                error_msg = f"Error: Cannot write to '{file_path}' as it is outside the working directory. Access denied."
+                print(f"{Fore.RED}{error_msg}{Style.RESET_ALL}")
+                return False
+        
+        # Create parent directories if they don't exist
+        parent_dir = os.path.dirname(file_path)
+        if parent_dir and not os.path.exists(parent_dir):
+            os.makedirs(parent_dir)
+            print(f"{Fore.GREEN}Created directory: {parent_dir}{Style.RESET_ALL}")
+        
         # Get the file's original encoding if it exists
         original_encoding = 'utf-8'  # Default encoding
         has_bom = False
@@ -595,7 +622,8 @@ def execute_command(command):
             args,
             shell=False,
             capture_output=True,
-            text=True
+            text=True,
+            cwd=WORKING_DIRECTORY if WORKING_DIRECTORY else None
         )
         
         # Prepare output
@@ -619,7 +647,8 @@ def _execute_with_shell(command):
             command, 
             shell=True, 
             capture_output=True, 
-            text=True
+            text=True,
+            cwd=WORKING_DIRECTORY if WORKING_DIRECTORY else None
         )
         
         # Prepare output
@@ -651,11 +680,11 @@ def fetch_url_content(url):
         try:
             response = requests.get(url, headers=headers, timeout=10)
         except requests.exceptions.Timeout:
-            return f"Error: Connection to {url} timed out after 10 seconds. The server might be slow or unavailable."
+            return f"Failed to fetch: Connection to {url} timed out after 10 seconds. The server might be slow or unavailable."
         except requests.exceptions.ConnectionError:
-            return f"Error: Failed to establish a connection to {url}. Please check your internet connection or verify the URL is correct."
+            return f"Failed to fetch: Could not establish a connection to {url}. Please check your internet connection or verify the URL is correct."
         except requests.exceptions.TooManyRedirects:
-            return f"Error: Too many redirects when accessing {url}. The URL might be in a redirect loop."
+            return f"Failed to fetch: Too many redirects when accessing {url}. The URL might be in a redirect loop."
         
         if response.status_code == 200:
             # Try to determine content type
@@ -697,21 +726,21 @@ def fetch_url_content(url):
                     print(f"Content truncated to {MAX_URL_CONTENT_LENGTH} characters")
                 return text
         elif response.status_code == 404:
-            return f"Error: The requested URL {url} was not found (404). Please check if the URL is correct."
+            return f"Failed to fetch: The requested URL {url} was not found (404). Please check if the URL is correct."
         elif response.status_code == 403:
-            return f"Error: Access to {url} is forbidden (403). The website may be blocking automated access."
+            return f"Failed to fetch: Access to {url} is forbidden (403). The website may be blocking automated access."
         elif response.status_code == 500:
-            return f"Error: The server at {url} encountered an internal error (500). Please try again later."
+            return f"Failed to fetch: The server at {url} encountered an internal error (500). Please try again later."
         elif response.status_code == 429:
-            return f"Error: Too many requests to {url} (429). The website is rate-limiting access."
+            return f"Failed to fetch: Too many requests to {url} (429). The website is rate-limiting access."
         else:
-            return f"Error: Failed to fetch {url}: HTTP status {response.status_code}"
+            return f"Failed to fetch: {url}: HTTP status {response.status_code}"
     except requests.exceptions.RequestException as e:
         error_type = type(e).__name__
-        return f"Error: Request failed for {url}: {error_type} - {str(e)}"
+        return f"Failed to fetch: Request failed for {url}: {error_type} - {str(e)}"
     except Exception as e:
         error_type = type(e).__name__
-        return f"Error: Unexpected {error_type} when processing {url}: {str(e)}"
+        return f"Failed to fetch: Unexpected {error_type} when processing {url}: {str(e)}"
 
 
 def duckduckgo_search(query, num_results=MAX_SEARCH_RESULTS):
@@ -898,15 +927,29 @@ def extract_run_query(query):
 
 def extract_model_query(query):
     """Extract the model name from a model query."""
+    model_name = None
+    
     if query.lower().startswith("model:"):
-        return query[6:].strip()
+        model_name = query[6:].strip()
     elif query.lower().startswith("model "):
-        return query[6:].strip()
+        model_name = query[6:].strip()
     elif query.lower().startswith("use model:"):
-        return query[10:].strip()
+        model_name = query[10:].strip()
     elif query.lower().startswith("use model "):
-        return query[10:].strip()
-    return query
+        model_name = query[10:].strip()
+    else:
+        return query
+    
+    # Handle empty model name (just "model:" without a specified model)
+    if not model_name:
+        return "list"  # Special value to indicate listing models
+    
+    # Strip quotes if present
+    if (model_name.startswith("'") and model_name.endswith("'")) or \
+       (model_name.startswith('"') and model_name.endswith('"')):
+        model_name = model_name[1:-1]
+    
+    return model_name
 
 
 def extract_specific_command(query):
@@ -921,18 +964,25 @@ def extract_specific_command(query):
 
 
 def get_file_list():
-    """Get a list of files in the current directory."""
+    """Get a list of files in the working directory."""
     try:
         files = []
-        for root, dirs, filenames in os.walk('.'):
+        search_dir = WORKING_DIRECTORY if WORKING_DIRECTORY else '.'
+        
+        for root, dirs, filenames in os.walk(search_dir):
             for filename in filenames:
                 # Skip hidden files and directories
                 if filename.startswith('.') or any(part.startswith('.') for part in root.split(os.sep)):
                     continue
-                files.append(os.path.join(root, filename))
+                # Return paths relative to the working directory
+                if WORKING_DIRECTORY:
+                    rel_path = os.path.relpath(os.path.join(root, filename), WORKING_DIRECTORY)
+                    files.append(rel_path)
+                else:
+                    files.append(os.path.join(root, filename))
         return files
     except Exception as e:
-        print(f"Error getting file list: {e}")
+        print(f"{Fore.RED}Error listing files: {e}{Style.RESET_ALL}")
         return []
 
 
@@ -1361,9 +1411,37 @@ def extract_suggested_command(response):
 
 def main():
     """Main function to run the coding assistant."""
+    global WORKING_DIRECTORY
+    
     try:
         print(f"{Fore.CYAN}🤖 Local LLM Coding Assistant 🤖{Style.RESET_ALL}")
         print(f"{Fore.CYAN}================================{Style.RESET_ALL}")
+        
+        # Setup working directory
+        default_dir = os.path.join(os.path.expanduser("~"), "llm_assistant_workspace")
+        working_dir = input(f"{Fore.GREEN}Enter working directory path (default: {default_dir}): {Style.RESET_ALL}")
+        
+        # Use default if nothing is entered
+        if not working_dir.strip():
+            working_dir = default_dir
+            
+        # Create directory if it doesn't exist
+        if not os.path.exists(working_dir):
+            try:
+                os.makedirs(working_dir)
+                print(f"{Fore.GREEN}Created working directory: {working_dir}{Style.RESET_ALL}")
+            except Exception as e:
+                print(f"{Fore.RED}Error creating working directory: {str(e)}{Style.RESET_ALL}")
+                print(f"{Fore.YELLOW}Using current directory as fallback.{Style.RESET_ALL}")
+                working_dir = os.getcwd()
+        
+        # Set the global working directory
+        WORKING_DIRECTORY = os.path.abspath(working_dir)
+        print(f"{Fore.GREEN}Working directory set to: {WORKING_DIRECTORY}{Style.RESET_ALL}")
+        
+        # Change to the working directory
+        os.chdir(WORKING_DIRECTORY)
+        
         print("Enter your coding questions and include file paths in square brackets.")
         print("Example: How can I improve this code? [main.py]")
         print()
@@ -1390,8 +1468,9 @@ def main():
         # Initialize conversation history
         conversation_history = []
         
-        # Display current model
+        # Display current model and settings
         print(f"Current model: {CURRENT_MODEL}")
+        print(f"Working directory: {WORKING_DIRECTORY}")
         print(f"Thinking display: {'ON' if SHOW_THINKING else 'OFF'}")
         print(f"Maximum thinking length: {MAX_THINKING_LENGTH} characters")
         print(f"LLM timeout: {DEFAULT_TIMEOUT} seconds")
@@ -1807,6 +1886,41 @@ def handle_model_query(user_input, conversation_history):
         print(f"{Fore.YELLOW}Could not extract a model name from the query.{Style.RESET_ALL}")
         return
     
+    # Special case for listing models
+    if model_name == "list":
+        try:
+            response = requests.get("http://localhost:11434/api/tags")
+            if response.status_code == 200:
+                available_models = [model.get("name") for model in response.json().get("models", [])]
+                if available_models:
+                    print(f"{Fore.CYAN}Available models:{Style.RESET_ALL}")
+                    for model in available_models:
+                        if model == CURRENT_MODEL:
+                            print(f"{Fore.GREEN}* {model} (current){Style.RESET_ALL}")
+                        else:
+                            print(f"  {model}")
+                    
+                    # Let the user select a model
+                    print()
+                    print(f"{Fore.CYAN}Current model: {CURRENT_MODEL}{Style.RESET_ALL}")
+                    new_model = input(f"{Fore.GREEN}Select a model (leave empty to keep current): {Style.RESET_ALL}")
+                    
+                    if not new_model.strip():
+                        print(f"{Fore.YELLOW}No change. Still using model: {CURRENT_MODEL}{Style.RESET_ALL}")
+                        return
+                    
+                    # Update model_name for the rest of the function
+                    model_name = new_model.strip()
+                else:
+                    print(f"{Fore.YELLOW}No models found.{Style.RESET_ALL}")
+                    return
+            else:
+                print(f"{Fore.YELLOW}Could not retrieve model list. HTTP {response.status_code}{Style.RESET_ALL}")
+                return
+        except requests.exceptions.RequestException as e:
+            print(f"{Fore.YELLOW}Error retrieving model list: {e}{Style.RESET_ALL}")
+            return
+    
     try:
         # Check if the model is available
         try:
@@ -1876,6 +1990,16 @@ def handle_create_query(user_input, conversation_history):
             file_path = file_item[0]
         else:
             file_path = file_item
+        
+        # Ensure the file path is within the working directory if set
+        if WORKING_DIRECTORY and not os.path.isabs(file_path):
+            file_path = os.path.join(WORKING_DIRECTORY, file_path)
+        elif WORKING_DIRECTORY and os.path.isabs(file_path):
+            # Check if the absolute path is within the working directory
+            if not os.path.abspath(file_path).startswith(WORKING_DIRECTORY):
+                error_msg = f"Error: Cannot create '{file_path}' as it is outside the working directory. Access denied."
+                print(f"{Fore.RED}{error_msg}{Style.RESET_ALL}")
+                continue
             
         if os.path.exists(file_path):
             print(f"{Fore.YELLOW}File '{file_path}' already exists.{Style.RESET_ALL}")
@@ -1887,6 +2011,12 @@ def handle_create_query(user_input, conversation_history):
         confirm = input(f"{Fore.YELLOW}Create '{file_path}'? (y/n): {Style.RESET_ALL}").lower()
         if confirm == 'y':
             try:
+                # Create parent directories if they don't exist
+                parent_dir = os.path.dirname(file_path)
+                if parent_dir and not os.path.exists(parent_dir):
+                    os.makedirs(parent_dir)
+                    print(f"{Fore.GREEN}Created directory: {parent_dir}{Style.RESET_ALL}")
+                
                 Path(file_path).touch()
                 print(f"{Fore.GREEN}Created '{file_path}'.{Style.RESET_ALL}")
                 conversation_history.append({"role": "system", "content": f"Created file '{file_path}'."})
