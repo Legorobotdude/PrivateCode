@@ -2152,7 +2152,10 @@ Return ONLY the JSON array of steps, with no additional text or explanation."""
     # Add the assistant's response to the conversation history
     conversation_history.append({"role": "assistant", "content": response})
     
-    # Extract JSON from the response
+    # Try to extract JSON from the response
+    steps = None
+    retry_needed = False
+    
     try:
         # Find JSON in the response - it might be surrounded by markdown code blocks
         json_start = response.find("[")
@@ -2168,11 +2171,95 @@ Return ONLY the JSON array of steps, with no additional text or explanation."""
             if code_blocks:
                 steps = json.loads(code_blocks[0])
             else:
+                retry_needed = True
                 raise ValueError("No valid JSON found in the response")
     except (json.JSONDecodeError, ValueError) as e:
-        print(f"{Fore.RED}Failed to parse the plan: {str(e)}{Style.RESET_ALL}")
-        print(f"{Fore.YELLOW}Raw response:{Style.RESET_ALL}")
-        print(response)
+        if not retry_needed:
+            print(f"{Fore.RED}Failed to parse the plan: {str(e)}{Style.RESET_ALL}")
+            print(f"{Fore.YELLOW}Raw response:{Style.RESET_ALL}")
+            print(response)
+        retry_needed = True
+    
+    # If we couldn't extract valid JSON, retry with stronger wording
+    if retry_needed:
+        print(f"{Fore.YELLOW}The model didn't return a valid JSON plan. Retrying with stronger instructions...{Style.RESET_ALL}")
+        
+        # Create a stronger prompt emphasizing JSON format
+        retry_prompt = f"""I need you to break down this project into EXECUTABLE STEPS in JSON FORMAT ONLY.
+
+User request: {plan_description}
+
+YOU MUST RESPOND WITH ONLY A JSON ARRAY (no explanatory text) containing steps with these exact formats:
+1. {{"type": "create_file", "file_path": "example.py"}}
+2. {{"type": "write_code", "file_path": "example.py", "code": "print('Hello')"}}
+3. {{"type": "run_command", "command": "python example.py"}}
+4. {{"type": "run_command_and_check", "command": "python example.py", "expected_output": "Hello"}}
+
+DO NOT include any explanations, markdown formatting, or anything other than the raw JSON array.
+ONLY return a valid parseable JSON array of steps.
+
+Format: 
+[
+  {{"type": "...", "...": "..."}},
+  {{"type": "...", "...": "..."}}
+]"""
+        
+        # Add the retry prompt to the conversation history
+        conversation_history.append({"role": "user", "content": retry_prompt})
+        
+        # Print "Retrying plan generation..." to indicate processing
+        print(f"{Fore.CYAN}Retrying plan generation...{Style.RESET_ALL}")
+        
+        # Get the response from Ollama
+        response = get_ollama_response(conversation_history)
+        
+        if not response:
+            print(f"{Fore.RED}Failed to get a plan from the model on retry.{Style.RESET_ALL}")
+            return
+        
+        # Add the assistant's retry response to the conversation history
+        conversation_history.append({"role": "assistant", "content": response})
+        
+        try:
+            # For the retry, be more aggressive in finding any JSON-like structure
+            # Try to extract the JSON array using various methods
+            
+            # Method 1: Look for array brackets
+            json_start = response.find("[")
+            json_end = response.rfind("]") + 1
+            
+            if json_start >= 0 and json_end > json_start:
+                json_str = response[json_start:json_end]
+                steps = json.loads(json_str)
+            else:
+                # Method 2: Look for code blocks
+                import re
+                code_blocks = re.findall(r"```(?:json)?\s*([\s\S]*?)\s*```", response)
+                if code_blocks:
+                    steps = json.loads(code_blocks[0])
+                else:
+                    # Method 3: Try to clean up the response and parse it
+                    # Remove common text artifacts that might interfere with JSON parsing
+                    cleaned_response = re.sub(r"```.*?```", "", response, flags=re.DOTALL)
+                    cleaned_response = re.sub(r"Here is the JSON array:|Here are the steps:|Steps:", "", cleaned_response)
+                    
+                    # Find the first [ and last ] in the cleaned response
+                    json_start = cleaned_response.find("[")
+                    json_end = cleaned_response.rfind("]") + 1
+                    
+                    if json_start >= 0 and json_end > json_start:
+                        json_str = cleaned_response[json_start:json_end]
+                        steps = json.loads(json_str)
+                    else:
+                        raise ValueError("No valid JSON found in the response even after retry")
+        except (json.JSONDecodeError, ValueError) as e:
+            print(f"{Fore.RED}Failed to parse the plan after retry: {str(e)}{Style.RESET_ALL}")
+            print(f"{Fore.YELLOW}Raw response from retry:{Style.RESET_ALL}")
+            print(response)
+            return
+    
+    if not steps:
+        print(f"{Fore.RED}Could not extract a valid plan from the model's response.{Style.RESET_ALL}")
         return
     
     # Display the plan to the user
