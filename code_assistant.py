@@ -2120,7 +2120,7 @@ def handle_plan_query(user_input, conversation_history):
     # Extract the plan description from the query
     plan_description = extract_plan_query(user_input)
     
-    # Construct prompt for the LLM
+    # Construct a strong prompt for the LLM with clear instructions
     planning_prompt = f"""You are an AI assistant helping a user to implement a project. The user's request is: {plan_description}
 
 Your task is to break down this request into a sequence of steps that the program can execute. Each step should be one of the following types:
@@ -2130,11 +2130,25 @@ write_code: with 'file_path' and 'code' parameters. 'file_path' is relative to t
 run_command: with 'command' parameter, which is the command to run in the working directory.
 run_command_and_check: with 'command' and 'expected_output' parameters, to run the command and verify the output.
 
-Please provide a list of such steps in JSON format, ensuring that the steps are detailed and specific, with actual code and commands included.
+YOU MUST RESPOND WITH ONLY A JSON ARRAY containing steps with these exact formats:
+1. {{"type": "create_file", "file_path": "example.py"}}
+2. {{"type": "write_code", "file_path": "example.py", "code": "print('Hello')"}}
+3. {{"type": "run_command", "command": "python example.py"}}
+4. {{"type": "run_command_and_check", "command": "python example.py", "expected_output": "Hello"}}
 
-Remember that the program will execute these steps with user confirmation, so the steps should be accurate and safe.
+IMPORTANT RULES:
+- Do not include <think> or </think> tags in your response
+- Do not include explanations, markdown formatting, or anything other than the raw JSON array
+- Ensure all JSON keys have proper quotes
+- Only use the four step types listed above
+- Make sure the generated plan can be executed with user confirmation
 
-Return ONLY the JSON array of steps, with no additional text or explanation."""
+ONLY return a valid parseable JSON array of steps, for example:
+[
+  {{"type": "create_file", "file_path": "main.py"}},
+  {{"type": "write_code", "file_path": "main.py", "code": "print('Hello, World!')"}},
+  {{"type": "run_command", "command": "python main.py"}}
+]"""
     
     # Add the planning prompt to the conversation history
     conversation_history.append({"role": "user", "content": planning_prompt})
@@ -2157,19 +2171,44 @@ Return ONLY the JSON array of steps, with no additional text or explanation."""
     retry_needed = False
     
     try:
-        # Find JSON in the response - it might be surrounded by markdown code blocks
-        json_start = response.find("[")
-        json_end = response.rfind("]") + 1
+        # Clean the response from thinking blocks and other non-JSON artifacts
+        import re
+        
+        # Remove thinking blocks
+        cleaned_response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL)
+        # Remove standalone think tags
+        cleaned_response = re.sub(r'</think>', '', cleaned_response)
+        cleaned_response = re.sub(r'<think>', '', cleaned_response)
+        
+        # Remove common text artifacts
+        cleaned_response = re.sub(r'```.*?```', '', cleaned_response, flags=re.DOTALL)
+        cleaned_response = re.sub(r'Here is the JSON array:|Here are the steps:|Steps:', '', cleaned_response)
+        
+        # Find JSON in the cleaned response
+        json_start = cleaned_response.find("[")
+        json_end = cleaned_response.rfind("]") + 1
         
         if json_start >= 0 and json_end > json_start:
-            json_str = response[json_start:json_end]
+            json_str = cleaned_response[json_start:json_end]
+            
+            # Try to fix common JSON syntax errors before parsing
+            # Fix missing quotes before keys
+            json_str = re.sub(r'{\s*([a-zA-Z0-9_]+)":', r'{"\1":', json_str)
+            # Fix missing commas between objects
+            json_str = re.sub(r'}\s*{', r'},{', json_str)
+            
             steps = json.loads(json_str)
         else:
-            # Try to extract from code blocks
-            import re
+            # Try to extract from code blocks in the original response
             code_blocks = re.findall(r"```(?:json)?\s*([\s\S]*?)\s*```", response)
             if code_blocks:
-                steps = json.loads(code_blocks[0])
+                json_str = code_blocks[0]
+                
+                # Apply the same fixes to code blocks
+                json_str = re.sub(r'{\s*([a-zA-Z0-9_]+)":', r'{"\1":', json_str)
+                json_str = re.sub(r'}\s*{', r'},{', json_str)
+                
+                steps = json.loads(json_str)
             else:
                 retry_needed = True
                 raise ValueError("No valid JSON found in the response")
@@ -2180,32 +2219,12 @@ Return ONLY the JSON array of steps, with no additional text or explanation."""
             print(response)
         retry_needed = True
     
-    # If we couldn't extract valid JSON, retry with stronger wording
+    # If we couldn't extract valid JSON, retry with the same prompt
     if retry_needed:
-        print(f"{Fore.YELLOW}The model didn't return a valid JSON plan. Retrying with stronger instructions...{Style.RESET_ALL}")
+        print(f"{Fore.YELLOW}The model didn't return a valid JSON plan. Retrying...{Style.RESET_ALL}")
         
-        # Create a stronger prompt emphasizing JSON format
-        retry_prompt = f"""I need you to break down this project into EXECUTABLE STEPS in JSON FORMAT ONLY.
-
-User request: {plan_description}
-
-YOU MUST RESPOND WITH ONLY A JSON ARRAY (no explanatory text) containing steps with these exact formats:
-1. {{"type": "create_file", "file_path": "example.py"}}
-2. {{"type": "write_code", "file_path": "example.py", "code": "print('Hello')"}}
-3. {{"type": "run_command", "command": "python example.py"}}
-4. {{"type": "run_command_and_check", "command": "python example.py", "expected_output": "Hello"}}
-
-DO NOT include any explanations, markdown formatting, or anything other than the raw JSON array.
-ONLY return a valid parseable JSON array of steps.
-
-Format: 
-[
-  {{"type": "...", "...": "..."}},
-  {{"type": "...", "...": "..."}}
-]"""
-        
-        # Add the retry prompt to the conversation history
-        conversation_history.append({"role": "user", "content": retry_prompt})
+        # Add the same planning prompt to the conversation history for retry
+        conversation_history.append({"role": "user", "content": planning_prompt})
         
         # Print "Retrying plan generation..." to indicate processing
         print(f"{Fore.CYAN}Retrying plan generation...{Style.RESET_ALL}")
@@ -2221,37 +2240,46 @@ Format:
         conversation_history.append({"role": "assistant", "content": response})
         
         try:
-            # For the retry, be more aggressive in finding any JSON-like structure
-            # Try to extract the JSON array using various methods
+            # For the retry, use the same cleaning and parsing logic
+            import re
             
-            # Method 1: Look for array brackets
-            json_start = response.find("[")
-            json_end = response.rfind("]") + 1
+            # Remove thinking blocks
+            cleaned_response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL)
+            # Remove standalone think tags
+            cleaned_response = re.sub(r'</think>', '', cleaned_response)
+            cleaned_response = re.sub(r'<think>', '', cleaned_response)
+            
+            # Remove common text artifacts
+            cleaned_response = re.sub(r'```.*?```', '', cleaned_response, flags=re.DOTALL)
+            cleaned_response = re.sub(r'Here is the JSON array:|Here are the steps:|Steps:', '', cleaned_response)
+            
+            # Find the first [ and last ] in the cleaned response
+            json_start = cleaned_response.find("[")
+            json_end = cleaned_response.rfind("]") + 1
             
             if json_start >= 0 and json_end > json_start:
-                json_str = response[json_start:json_end]
+                json_str = cleaned_response[json_start:json_end]
+                
+                # Try to fix common JSON syntax errors before parsing
+                # Fix missing quotes before keys
+                json_str = re.sub(r'{\s*([a-zA-Z0-9_]+)":', r'{"\1":', json_str)
+                # Fix missing commas between objects
+                json_str = re.sub(r'}\s*{', r'},{', json_str)
+                
                 steps = json.loads(json_str)
             else:
-                # Method 2: Look for code blocks
-                import re
+                # Try to extract from code blocks
                 code_blocks = re.findall(r"```(?:json)?\s*([\s\S]*?)\s*```", response)
                 if code_blocks:
-                    steps = json.loads(code_blocks[0])
+                    json_str = code_blocks[0]
+                    
+                    # Apply the same fixes to code blocks
+                    json_str = re.sub(r'{\s*([a-zA-Z0-9_]+)":', r'{"\1":', json_str)
+                    json_str = re.sub(r'}\s*{', r'},{', json_str)
+                    
+                    steps = json.loads(json_str)
                 else:
-                    # Method 3: Try to clean up the response and parse it
-                    # Remove common text artifacts that might interfere with JSON parsing
-                    cleaned_response = re.sub(r"```.*?```", "", response, flags=re.DOTALL)
-                    cleaned_response = re.sub(r"Here is the JSON array:|Here are the steps:|Steps:", "", cleaned_response)
-                    
-                    # Find the first [ and last ] in the cleaned response
-                    json_start = cleaned_response.find("[")
-                    json_end = cleaned_response.rfind("]") + 1
-                    
-                    if json_start >= 0 and json_end > json_start:
-                        json_str = cleaned_response[json_start:json_end]
-                        steps = json.loads(json_str)
-                    else:
-                        raise ValueError("No valid JSON found in the response even after retry")
+                    raise ValueError("No valid JSON found in the response even after retry")
         except (json.JSONDecodeError, ValueError) as e:
             print(f"{Fore.RED}Failed to parse the plan after retry: {str(e)}{Style.RESET_ALL}")
             print(f"{Fore.YELLOW}Raw response from retry:{Style.RESET_ALL}")

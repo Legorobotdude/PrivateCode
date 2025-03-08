@@ -349,7 +349,7 @@ def test_json_retry_mechanism(mock_get_response, mock_inputs):
         code_assistant.handle_plan_query("plan: Test retry mechanism", conversation_history)
         
         # Verify the retry message was printed
-        mock_print.assert_any_call(f"{code_assistant.Fore.YELLOW}The model didn't return a valid JSON plan. Retrying with stronger instructions...{code_assistant.Style.RESET_ALL}")
+        mock_print.assert_any_call(f"{code_assistant.Fore.YELLOW}The model didn't return a valid JSON plan. Retrying...{code_assistant.Style.RESET_ALL}")
         
         # Verify the retry generation message was printed
         mock_print.assert_any_call(f"{code_assistant.Fore.CYAN}Retrying plan generation...{code_assistant.Style.RESET_ALL}")
@@ -360,10 +360,51 @@ def test_json_retry_mechanism(mock_get_response, mock_inputs):
         # Check that get_ollama_response was called twice (initial + retry)
         assert mock_get_response.call_count == 2
         
-        # Verify retry prompt contains stronger language about JSON format
-        retry_call_args = mock_get_response.call_args_list[1][0][0]
-        assert any("YOU MUST RESPOND WITH ONLY A JSON ARRAY" in msg.get('content', '') 
-                  for msg in retry_call_args if msg.get('role') == 'user')
+        # Verify the same planning prompt is used for both the initial request and retry
+        assert conversation_history[0]["content"] == conversation_history[2]["content"]
+        assert "YOU MUST RESPOND WITH ONLY A JSON ARRAY" in conversation_history[0]["content"]
+
+@patch('code_assistant.get_ollama_response')
+def test_thinking_blocks_and_malformed_json(mock_get_response, mock_inputs):
+    """Test handling of responses with thinking blocks and malformed JSON."""
+    # Response with thinking blocks and a malformed JSON (missing quote)
+    response_with_thinking = """<think>
+I'll create a plan for making a Hello World program.
+</think>
+
+[
+  {"type": "create_file", "file_path": "hello.py"},
+  {"type": "write_code", "file_path": "hello.py", "code": "print('Hello, World!')"},
+  {
+    type": "run_command_and_check",
+    "command": "python hello.py",
+    "expected_output": "Hello, World!"
+  }
+]"""
+    
+    mock_get_response.return_value = response_with_thinking
+    
+    # Mock all user inputs to return 'n' (no) to avoid actual execution
+    mock_inputs.return_value = 'n'
+    
+    with patch('builtins.print') as mock_print:
+        conversation_history = []
+        code_assistant.handle_plan_query("plan: Test thinking blocks and malformed JSON", conversation_history)
+        
+        # We should NOT see a retry message since our cleaning and repairing should handle this
+        retry_message = f"{code_assistant.Fore.YELLOW}The model didn't return a valid JSON plan. Retrying...{code_assistant.Style.RESET_ALL}"
+        retry_calls = [call for call in mock_print.call_args_list if call[0][0] == retry_message]
+        assert len(retry_calls) == 0, "Retry message was printed when it should have been handled without retry"
+        
+        # Verify that the plan display appears, indicating successful parsing
+        mock_print.assert_any_call(f"{code_assistant.Fore.GREEN}Generated Plan:{code_assistant.Style.RESET_ALL}")
+        
+        # Verify that get_ollama_response was called only once (no retry needed)
+        assert mock_get_response.call_count == 1
+        
+        # Check that the response was added to the conversation history
+        assert len(conversation_history) == 2  # Prompt and response
+        assert conversation_history[1]["content"] == response_with_thinking
 
 @patch('code_assistant.handle_plan_query')
 def test_vibecode_alias_in_main_flow(mock_handle_plan):
