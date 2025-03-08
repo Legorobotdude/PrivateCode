@@ -58,3 +58,51 @@ def mock_timeout_responses():
     
     # Restore original timeout value
     code_assistant.DEFAULT_TIMEOUT = original_timeout 
+
+@pytest.fixture
+def mock_plan_prompt():
+    """Fixture providing a mock plan prompt and expected JSON response."""
+    
+    plan_query = "Create a simple Python script that prints 'Hello, World!' and run it to verify."
+    
+    # Sample plan JSON that would be returned by the LLM
+    plan_json = """[
+        {
+            "type": "create_file",
+            "file_path": "hello.py"
+        },
+        {
+            "type": "write_code",
+            "file_path": "hello.py",
+            "code": "print('Hello, World!')"
+        },
+        {
+            "type": "run_command",
+            "command": "python hello.py"
+        },
+        {
+            "type": "run_command_and_check",
+            "command": "python hello.py",
+            "expected_output": "Hello, World!"
+        }
+    ]"""
+    
+    # Sample LLM response with the JSON embedded
+    llm_response = f"""I've analyzed your request and broken it down into the following steps:
+
+```json
+{plan_json}
+```
+
+These steps will:
+1. Create a hello.py file
+2. Write code to print 'Hello, World!'
+3. Run the script
+4. Run the script again and verify the output is 'Hello, World!'
+"""
+    
+    return {
+        "query": plan_query,
+        "json": plan_json,
+        "response": llm_response
+    } 

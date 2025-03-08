@@ -865,32 +865,37 @@ def extract_file_paths_and_urls(query):
 
 
 def is_search_query(query):
-    """Check if the query is a search request."""
+    """Check if the query is a search query."""
     return query.lower().startswith(("search:", "search "))
 
 
 def is_edit_query(query):
-    """Check if the query is a file edit request."""
+    """Check if the query is an edit query."""
     return query.lower().startswith(("edit:", "edit "))
 
 
 def is_run_query(query):
-    """Check if the query is a command execution request."""
+    """Check if the query is a run command query."""
     return query.lower().startswith(("run:", "run "))
 
 
 def is_model_query(query):
-    """Check if the query is a model change request."""
+    """Check if the query is a model query."""
     return query.lower().startswith(("model:", "model ", "use model:", "use model "))
 
 
 def is_create_query(query):
-    """Check if the query is a file creation request."""
+    """Check if the query is a create query."""
     return query.lower().startswith(("create:", "create "))
 
 
+def is_plan_query(query):
+    """Check if the query is a plan query."""
+    return query.lower().startswith(("plan:", "plan ", "vibecode:", "vibecode "))
+
+
 def extract_create_query(query):
-    """Extract the file path from a create query."""
+    """Extract the create query from the input."""
     if query.lower().startswith("create:"):
         return query[7:].strip()
     elif query.lower().startswith("create "):
@@ -927,29 +932,30 @@ def extract_run_query(query):
 
 def extract_model_query(query):
     """Extract the model name from a model query."""
-    model_name = None
-    
     if query.lower().startswith("model:"):
-        model_name = query[6:].strip()
+        return query[6:].strip()
     elif query.lower().startswith("model "):
-        model_name = query[6:].strip()
+        return query[6:].strip()
     elif query.lower().startswith("use model:"):
-        model_name = query[10:].strip()
+        return query[10:].strip()
     elif query.lower().startswith("use model "):
-        model_name = query[10:].strip()
+        return query[10:].strip()
     else:
         return query
-    
-    # Handle empty model name (just "model:" without a specified model)
-    if not model_name:
-        return "list"  # Special value to indicate listing models
-    
-    # Strip quotes if present
-    if (model_name.startswith("'") and model_name.endswith("'")) or \
-       (model_name.startswith('"') and model_name.endswith('"')):
-        model_name = model_name[1:-1]
-    
-    return model_name
+
+
+def extract_plan_query(query):
+    """Extract the plan description from a plan query."""
+    if query.lower().startswith("plan:"):
+        return query[5:].strip()
+    elif query.lower().startswith("plan "):
+        return query[5:].strip()
+    elif query.lower().startswith("vibecode:"):
+        return query[9:].strip()
+    elif query.lower().startswith("vibecode "):
+        return query[9:].strip()
+    else:
+        return query
 
 
 def extract_specific_command(query):
@@ -1492,14 +1498,17 @@ def main():
                     print(f"{Fore.CYAN}=========================================={Style.RESET_ALL}")
                     
                     print(f"\n{Fore.YELLOW}File Operations:{Style.RESET_ALL}")
-                    print("  create: [filename] - Create a new file")
-                    print("  edit: [filename] - Edit an existing file")
+                    print("  create: [path] - Create a new file")
+                    print("  edit: [path] - Edit an existing file")
                     
                     print(f"\n{Fore.YELLOW}Execution:{Style.RESET_ALL}")
                     print("  run: [command] - Execute a command")
                     
                     print(f"\n{Fore.YELLOW}Information:{Style.RESET_ALL}")
                     print("  search: [query] - Search the web for information")
+                    
+                    print(f"\n{Fore.YELLOW}Project Planning:{Style.RESET_ALL}")
+                    print("  plan: [description] - Generate and execute a plan of steps for a project")
                     
                     print(f"\n{Fore.YELLOW}LLM Settings:{Style.RESET_ALL}")
                     print("  model: [name] - Switch to a different model")
@@ -1516,6 +1525,7 @@ def main():
                     print("  edit: [main.py] to fix the bug in the login function")
                     print("  run: python3 test.py")
                     print("  search: how to use async/await in Python")
+                    print("  plan: Create a simple Python script that prints 'Hello, World!' and run it to verify")
                     print("  model: codellama")
                     continue
                     
@@ -1551,6 +1561,7 @@ def main():
                 run_mode = is_run_query(user_input)
                 model_mode = is_model_query(user_input)
                 create_mode = is_create_query(user_input)
+                plan_mode = is_plan_query(user_input)
                 
                 # Handle different query types
                 try:
@@ -1564,6 +1575,8 @@ def main():
                         handle_model_query(user_input, conversation_history)
                     elif create_mode:
                         handle_create_query(user_input, conversation_history)
+                    elif plan_mode:
+                        handle_plan_query(user_input, conversation_history)
                     else:
                         handle_regular_query(user_input, conversation_history)
                 except Exception as e:
@@ -2093,6 +2106,217 @@ def handle_regular_query(user_input, conversation_history):
         print(f"{Fore.GREEN}{processed_response}{Style.RESET_ALL}")
     else:
         print(f"{Fore.RED}Failed to get a response from the model.{Style.RESET_ALL}")
+
+
+def handle_plan_query(user_input, conversation_history):
+    """
+    Handle planning queries by breaking down high-level requests into executable steps.
+    The steps are presented to the user for review and can be executed with confirmation.
+    """
+    import json
+    from pathlib import Path
+    import subprocess
+    
+    # Extract the plan description from the query
+    plan_description = extract_plan_query(user_input)
+    
+    # Construct prompt for the LLM
+    planning_prompt = f"""You are an AI assistant helping a user to implement a project. The user's request is: {plan_description}
+
+Your task is to break down this request into a sequence of steps that the program can execute. Each step should be one of the following types:
+
+create_file: with 'file_path' parameter, which is a path relative to the working directory.
+write_code: with 'file_path' and 'code' parameters. 'file_path' is relative to the working directory, and 'code' is the exact code to write to the file, which will overwrite any existing content.
+run_command: with 'command' parameter, which is the command to run in the working directory.
+run_command_and_check: with 'command' and 'expected_output' parameters, to run the command and verify the output.
+
+Please provide a list of such steps in JSON format, ensuring that the steps are detailed and specific, with actual code and commands included.
+
+Remember that the program will execute these steps with user confirmation, so the steps should be accurate and safe.
+
+Return ONLY the JSON array of steps, with no additional text or explanation."""
+    
+    # Add the planning prompt to the conversation history
+    conversation_history.append({"role": "user", "content": planning_prompt})
+    
+    # Print "Generating plan..." to indicate processing
+    print(f"{Fore.CYAN}Generating plan...{Style.RESET_ALL}")
+    
+    # Get the response from Ollama
+    response = get_ollama_response(conversation_history)
+    
+    if not response:
+        print(f"{Fore.RED}Failed to get a plan from the model.{Style.RESET_ALL}")
+        return
+    
+    # Add the assistant's response to the conversation history
+    conversation_history.append({"role": "assistant", "content": response})
+    
+    # Extract JSON from the response
+    try:
+        # Find JSON in the response - it might be surrounded by markdown code blocks
+        json_start = response.find("[")
+        json_end = response.rfind("]") + 1
+        
+        if json_start >= 0 and json_end > json_start:
+            json_str = response[json_start:json_end]
+            steps = json.loads(json_str)
+        else:
+            # Try to extract from code blocks
+            import re
+            code_blocks = re.findall(r"```(?:json)?\s*([\s\S]*?)\s*```", response)
+            if code_blocks:
+                steps = json.loads(code_blocks[0])
+            else:
+                raise ValueError("No valid JSON found in the response")
+    except (json.JSONDecodeError, ValueError) as e:
+        print(f"{Fore.RED}Failed to parse the plan: {str(e)}{Style.RESET_ALL}")
+        print(f"{Fore.YELLOW}Raw response:{Style.RESET_ALL}")
+        print(response)
+        return
+    
+    # Display the plan to the user
+    print(f"{Fore.GREEN}Generated Plan:{Style.RESET_ALL}")
+    for i, step in enumerate(steps, 1):
+        step_type = step.get("type")
+        if step_type == "create_file":
+            print(f"{i}. Create file: {step.get('file_path')}")
+        elif step_type == "write_code":
+            print(f"{i}. Write code to: {step.get('file_path')}")
+            print(f"   Code snippet: {step.get('code')[:50]}..." if len(step.get('code', '')) > 50 else f"   Code: {step.get('code')}")
+        elif step_type == "run_command":
+            print(f"{i}. Run command: {step.get('command')}")
+        elif step_type == "run_command_and_check":
+            print(f"{i}. Run and check: {step.get('command')}")
+            print(f"   Expected output: {step.get('expected_output')}")
+        else:
+            print(f"{i}. Unknown step type: {step_type}")
+    
+    # Ask if the user wants to save the plan
+    save_plan = input(f"{Fore.YELLOW}Do you want to save this plan to a file? (y/n): {Style.RESET_ALL}")
+    if save_plan.lower() == 'y':
+        plan_file = input(f"{Fore.YELLOW}Enter filename to save the plan (default: steps.json): {Style.RESET_ALL}")
+        if not plan_file:
+            plan_file = "steps.json"
+        
+        try:
+            with open(plan_file, 'w') as f:
+                json.dump(steps, f, indent=2)
+            print(f"{Fore.GREEN}Plan saved to {plan_file}{Style.RESET_ALL}")
+        except Exception as e:
+            print(f"{Fore.RED}Failed to save plan: {str(e)}{Style.RESET_ALL}")
+    
+    # Execute steps with user confirmation
+    proceed = input(f"{Fore.YELLOW}Do you want to start executing the plan? (y/n): {Style.RESET_ALL}")
+    if proceed.lower() != 'y':
+        return
+    
+    # Execute each step
+    for i, step in enumerate(steps, 1):
+        step_type = step.get("type")
+        
+        # Display the current step
+        if step_type == "create_file":
+            print(f"{Fore.CYAN}Step {i}: Create file {step.get('file_path')}{Style.RESET_ALL}")
+        elif step_type == "write_code":
+            print(f"{Fore.CYAN}Step {i}: Write code to {step.get('file_path')}{Style.RESET_ALL}")
+            print(f"Code to write:\n{step.get('code')}")
+        elif step_type == "run_command":
+            print(f"{Fore.CYAN}Step {i}: Run command: {step.get('command')}{Style.RESET_ALL}")
+        elif step_type == "run_command_and_check":
+            print(f"{Fore.CYAN}Step {i}: Run and check: {step.get('command')}{Style.RESET_ALL}")
+            print(f"Expected output: {step.get('expected_output')}")
+        else:
+            print(f"{Fore.RED}Unknown step type: {step_type}. Skipping.{Style.RESET_ALL}")
+            continue
+        
+        # Get user confirmation
+        confirm = input(f"{Fore.YELLOW}Do you want to execute this step? (y/n): {Style.RESET_ALL}")
+        if confirm.lower() != 'y':
+            print(f"{Fore.YELLOW}Step skipped.{Style.RESET_ALL}")
+            
+            # Ask if the user wants to continue with the next steps
+            continue_plan = input(f"{Fore.YELLOW}Continue with the next steps? (y/n): {Style.RESET_ALL}")
+            if continue_plan.lower() != 'y':
+                break
+            continue
+        
+        try:
+            # Execute the step based on its type
+            if step_type == "create_file":
+                file_path = step.get('file_path')
+                file = Path(file_path)
+                
+                if file.exists():
+                    overwrite = input(f"{Fore.YELLOW}File {file_path} already exists. Do you want to overwrite it with an empty file? (y/n): {Style.RESET_ALL}")
+                    if overwrite.lower() != 'y':
+                        print(f"{Fore.YELLOW}File creation skipped.{Style.RESET_ALL}")
+                        continue
+                
+                # Create the directory if it doesn't exist
+                file.parent.mkdir(parents=True, exist_ok=True)
+                file.touch()
+                print(f"{Fore.GREEN}Created empty file: {file_path}{Style.RESET_ALL}")
+                
+            elif step_type == "write_code":
+                file_path = step.get('file_path')
+                code = step.get('code')
+                file = Path(file_path)
+                
+                if file.exists():
+                    overwrite = input(f"{Fore.YELLOW}File {file_path} already exists. Do you want to overwrite it? (y/n): {Style.RESET_ALL}")
+                    if overwrite.lower() != 'y':
+                        print(f"{Fore.YELLOW}Writing code skipped.{Style.RESET_ALL}")
+                        continue
+                
+                # Create the directory if it doesn't exist
+                file.parent.mkdir(parents=True, exist_ok=True)
+                file.write_text(code)
+                print(f"{Fore.GREEN}Code written to: {file_path}{Style.RESET_ALL}")
+                
+            elif step_type == "run_command":
+                command = step.get('command')
+                print(f"{Fore.CYAN}Executing: {command}{Style.RESET_ALL}")
+                
+                result = subprocess.run(command, shell=True, capture_output=True, text=True)
+                if result.returncode == 0:
+                    print(f"{Fore.GREEN}Command executed successfully:{Style.RESET_ALL}")
+                    print(result.stdout)
+                else:
+                    print(f"{Fore.RED}Command failed with error code {result.returncode}:{Style.RESET_ALL}")
+                    print(result.stderr)
+                
+            elif step_type == "run_command_and_check":
+                command = step.get('command')
+                expected_output = step.get('expected_output')
+                
+                print(f"{Fore.CYAN}Executing: {command}{Style.RESET_ALL}")
+                
+                result = subprocess.run(command, shell=True, capture_output=True, text=True)
+                if result.returncode == 0:
+                    print(f"{Fore.GREEN}Command executed successfully:{Style.RESET_ALL}")
+                    print(result.stdout)
+                    
+                    # Check if the output matches the expected output
+                    if result.stdout.strip() == expected_output.strip():
+                        print(f"{Fore.GREEN}Test passed! Output matches expected output.{Style.RESET_ALL}")
+                    else:
+                        print(f"{Fore.RED}Test failed.{Style.RESET_ALL}")
+                        print(f"{Fore.YELLOW}Expected: {expected_output}{Style.RESET_ALL}")
+                        print(f"{Fore.YELLOW}Actual: {result.stdout}{Style.RESET_ALL}")
+                else:
+                    print(f"{Fore.RED}Command failed with error code {result.returncode}:{Style.RESET_ALL}")
+                    print(result.stderr)
+        
+        except Exception as e:
+            print(f"{Fore.RED}Error executing step: {str(e)}{Style.RESET_ALL}")
+        
+        # Ask if the user wants to continue with the next steps
+        continue_plan = input(f"{Fore.YELLOW}Continue with the next steps? (y/n): {Style.RESET_ALL}")
+        if continue_plan.lower() != 'y':
+            break
+    
+    print(f"{Fore.GREEN}Plan execution completed.{Style.RESET_ALL}")
 
 
 if __name__ == "__main__":

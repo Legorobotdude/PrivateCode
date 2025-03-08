@@ -44,3 +44,4 @@ ENV/
 logs/ 
 tests/C
 benchmark_results.json
+steps.json
