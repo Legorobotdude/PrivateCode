@@ -945,7 +945,16 @@ def extract_model_query(query):
 
 
 def extract_plan_query(query):
-    """Extract the plan description from a plan query."""
+    """
+    Extract the plan description from a query.
+    
+    Args:
+        query (str): The user's query
+        
+    Returns:
+        str: The plan description
+    """
+    # Remove the "plan:" prefix
     if query.lower().startswith("plan:"):
         return query[5:].strip()
     elif query.lower().startswith("plan "):
@@ -955,7 +964,7 @@ def extract_plan_query(query):
     elif query.lower().startswith("vibecode "):
         return query[9:].strip()
     else:
-        return query
+        return query.strip()
 
 
 def extract_specific_command(query):
@@ -2120,33 +2129,57 @@ def handle_plan_query(user_input, conversation_history):
     # Extract the plan description from the query
     plan_description = extract_plan_query(user_input)
     
+    # Extract file paths from the query for providing context
+    # Use a regex to find file paths in square brackets
+    import re
+    file_paths = re.findall(r'\[([^\]]+)\]', user_input)
+    
+    # Read the contents of the specified files for context
+    file_contents = {}
+    for file_path in file_paths:
+        content = read_file_content(file_path)
+        if content:
+            file_contents[file_path] = content
+        else:
+            print(f"{Fore.YELLOW}Warning: Could not read file {file_path}{Style.RESET_ALL}")
+    
+    # Construct the file context section if any files were successfully read
+    file_context = ""
+    if file_contents:
+        file_context = "Files for context:\n\n"
+        for file_path, content in file_contents.items():
+            file_context += f"--- {file_path} ---\n{content}\n\n"
+    
     # Construct a strong prompt for the LLM with clear instructions
     planning_prompt = f"""You are an AI assistant helping a user to implement a project. The user's request is: {plan_description}
 
-Your task is to break down this request into a sequence of steps that the program can execute. Each step should be one of the following types:
+{file_context}Your task is to break down this request into a sequence of steps that the program can execute. Each step should be one of the following types:
 
 create_file: with 'file_path' parameter, which is a path relative to the working directory.
 write_code: with 'file_path' and 'code' parameters. 'file_path' is relative to the working directory, and 'code' is the exact code to write to the file, which will overwrite any existing content.
+edit_file: with 'file_path', 'original_pattern', and 'new_content' parameters. This will find the original_pattern in the file and replace it with new_content.
 run_command: with 'command' parameter, which is the command to run in the working directory.
 run_command_and_check: with 'command' and 'expected_output' parameters, to run the command and verify the output.
 
 YOU MUST RESPOND WITH ONLY A JSON ARRAY containing steps with these exact formats:
 1. {{"type": "create_file", "file_path": "example.py"}}
 2. {{"type": "write_code", "file_path": "example.py", "code": "print('Hello')"}}
-3. {{"type": "run_command", "command": "python example.py"}}
-4. {{"type": "run_command_and_check", "command": "python example.py", "expected_output": "Hello"}}
+3. {{"type": "edit_file", "file_path": "example.py", "original_pattern": "print('Hello')", "new_content": "print('Hello World')"}}
+4. {{"type": "run_command", "command": "python example.py"}}
+5. {{"type": "run_command_and_check", "command": "python example.py", "expected_output": "Hello"}}
 
 IMPORTANT RULES:
 - Do not include <think> or </think> tags in your response
 - Do not include explanations, markdown formatting, or anything other than the raw JSON array
 - Ensure all JSON keys have proper quotes
-- Only use the four step types listed above
+- Only use the step types listed above
 - Make sure the generated plan can be executed with user confirmation
 
 ONLY return a valid parseable JSON array of steps, for example:
 [
   {{"type": "create_file", "file_path": "main.py"}},
   {{"type": "write_code", "file_path": "main.py", "code": "print('Hello, World!')"}},
+  {{"type": "edit_file", "file_path": "existing.py", "original_pattern": "def old_function():", "new_content": "def new_function():"}},
   {{"type": "run_command", "command": "python main.py"}}
 ]"""
     
@@ -2299,6 +2332,10 @@ ONLY return a valid parseable JSON array of steps, for example:
         elif step_type == "write_code":
             print(f"{i}. Write code to: {step.get('file_path')}")
             print(f"   Code snippet: {step.get('code')[:50]}..." if len(step.get('code', '')) > 50 else f"   Code: {step.get('code')}")
+        elif step_type == "edit_file":
+            print(f"{i}. Edit file: {step.get('file_path')}")
+            print(f"   Find: {step.get('original_pattern')[:30]}..." if len(step.get('original_pattern', '')) > 30 else f"   Find: {step.get('original_pattern')}")
+            print(f"   Replace with: {step.get('new_content')[:30]}..." if len(step.get('new_content', '')) > 30 else f"   Replace with: {step.get('new_content')}")
         elif step_type == "run_command":
             print(f"{i}. Run command: {step.get('command')}")
         elif step_type == "run_command_and_check":
@@ -2333,51 +2370,34 @@ ONLY return a valid parseable JSON array of steps, for example:
         # Display the current step
         if step_type == "create_file":
             print(f"{Fore.CYAN}Step {i}: Create file {step.get('file_path')}{Style.RESET_ALL}")
+            
+            file_path = step.get('file_path')
+            file = Path(file_path)
+            
+            if file.exists():
+                overwrite = input(f"{Fore.YELLOW}File {file_path} already exists. Do you want to overwrite it with an empty file? (y/n): {Style.RESET_ALL}")
+                if overwrite.lower() != 'y':
+                    print(f"{Fore.YELLOW}File creation skipped.{Style.RESET_ALL}")
+                    continue
+            
+            # Create the directory if it doesn't exist
+            file.parent.mkdir(parents=True, exist_ok=True)
+            file.touch()
+            print(f"{Fore.GREEN}Created empty file: {file_path}{Style.RESET_ALL}")
+            confirm = input(f"{Fore.YELLOW}Continue with the next steps? (y/n): {Style.RESET_ALL}")
+            if confirm.lower() != 'y':
+                break
+            continue
         elif step_type == "write_code":
             print(f"{Fore.CYAN}Step {i}: Write code to {step.get('file_path')}{Style.RESET_ALL}")
             print(f"Code to write:\n{step.get('code')}")
-        elif step_type == "run_command":
-            print(f"{Fore.CYAN}Step {i}: Run command: {step.get('command')}{Style.RESET_ALL}")
-        elif step_type == "run_command_and_check":
-            print(f"{Fore.CYAN}Step {i}: Run and check: {step.get('command')}{Style.RESET_ALL}")
-            print(f"Expected output: {step.get('expected_output')}")
-        else:
-            print(f"{Fore.RED}Unknown step type: {step_type}. Skipping.{Style.RESET_ALL}")
-            continue
-        
-        # Get user confirmation
-        confirm = input(f"{Fore.YELLOW}Do you want to execute this step? (y/n): {Style.RESET_ALL}")
-        if confirm.lower() != 'y':
-            print(f"{Fore.YELLOW}Step skipped.{Style.RESET_ALL}")
             
-            # Ask if the user wants to continue with the next steps
-            continue_plan = input(f"{Fore.YELLOW}Continue with the next steps? (y/n): {Style.RESET_ALL}")
-            if continue_plan.lower() != 'y':
-                break
-            continue
-        
-        try:
-            # Execute the step based on its type
-            if step_type == "create_file":
-                file_path = step.get('file_path')
-                file = Path(file_path)
-                
-                if file.exists():
-                    overwrite = input(f"{Fore.YELLOW}File {file_path} already exists. Do you want to overwrite it with an empty file? (y/n): {Style.RESET_ALL}")
-                    if overwrite.lower() != 'y':
-                        print(f"{Fore.YELLOW}File creation skipped.{Style.RESET_ALL}")
-                        continue
-                
-                # Create the directory if it doesn't exist
-                file.parent.mkdir(parents=True, exist_ok=True)
-                file.touch()
-                print(f"{Fore.GREEN}Created empty file: {file_path}{Style.RESET_ALL}")
-                
-            elif step_type == "write_code":
-                file_path = step.get('file_path')
-                code = step.get('code')
-                file = Path(file_path)
-                
+            file_path = step.get('file_path')
+            code = step.get('code')
+            file = Path(file_path)
+            
+            confirm = input(f"{Fore.YELLOW}Do you want to execute this step? (y/n): {Style.RESET_ALL}")
+            if confirm.lower() == 'y':
                 if file.exists():
                     overwrite = input(f"{Fore.YELLOW}File {file_path} already exists. Do you want to overwrite it? (y/n): {Style.RESET_ALL}")
                     if overwrite.lower() != 'y':
@@ -2388,11 +2408,65 @@ ONLY return a valid parseable JSON array of steps, for example:
                 file.parent.mkdir(parents=True, exist_ok=True)
                 file.write_text(code)
                 print(f"{Fore.GREEN}Code written to: {file_path}{Style.RESET_ALL}")
+            else:
+                print(f"{Fore.YELLOW}Step skipped.{Style.RESET_ALL}")
+            
+            confirm = input(f"{Fore.YELLOW}Continue with the next steps? (y/n): {Style.RESET_ALL}")
+            if confirm.lower() != 'y':
+                break
+            continue
+        elif step_type == "edit_file":
+            print(f"{Fore.CYAN}Step {i}: Edit file {step.get('file_path')}{Style.RESET_ALL}")
+            print(f"Find: {step.get('original_pattern')}")
+            print(f"Replace with: {step.get('new_content')}")
+            
+            # Read the current content of the file
+            file_path = step.get('file_path')
+            original_pattern = step.get('original_pattern')
+            new_content = step.get('new_content')
+            
+            current_content = read_file_content(file_path)
+            if current_content is None:
+                print(f"{Fore.RED}Could not read file {file_path} for editing.{Style.RESET_ALL}")
+                continue
                 
-            elif step_type == "run_command":
+            # Check if the pattern exists in the file
+            if original_pattern in current_content:
+                # Generate a preview of the changes
+                updated_content = current_content.replace(original_pattern, new_content)
+                diff = generate_colored_diff(current_content, updated_content, file_path)
+                print(f"{Fore.CYAN}Changes preview:{Style.RESET_ALL}")
+                print(diff)
+                
+                # Ask for confirmation
+                confirm = input(f"{Fore.YELLOW}Do you want to apply these changes? (y/n): {Style.RESET_ALL}")
+                if confirm.lower() == 'y':
+                    # Apply the changes
+                    if write_file_content(file_path, updated_content):
+                        print(f"{Fore.GREEN}File {file_path} edited successfully.{Style.RESET_ALL}")
+                        conversation_history.append({
+                            "role": "system", 
+                            "content": f"The file '{file_path}' was edited, replacing '{original_pattern}' with '{new_content}'."
+                        })
+                    else:
+                        print(f"{Fore.RED}Failed to write changes to {file_path}.{Style.RESET_ALL}")
+                else:
+                    print(f"{Fore.YELLOW}Changes cancelled for {file_path}.{Style.RESET_ALL}")
+            else:
+                print(f"{Fore.RED}The pattern to replace was not found in {file_path}.{Style.RESET_ALL}")
+                # Ask if the user wants to see the file content
+                view_content = input(f"{Fore.YELLOW}Do you want to view the current file content? (y/n): {Style.RESET_ALL}")
+                if view_content.lower() == 'y':
+                    print(f"{Fore.CYAN}Current content of {file_path}:{Style.RESET_ALL}")
+                    print(current_content)
+        elif step_type == "run_command":
+            print(f"{Fore.CYAN}Step {i}: Run command: {step.get('command')}{Style.RESET_ALL}")
+            confirm = input(f"{Fore.YELLOW}Do you want to execute this step? (y/n): {Style.RESET_ALL}")
+            if confirm.lower() == 'y':
+                print(f"{Fore.CYAN}Executing: {step.get('command')}{Style.RESET_ALL}")
+                
+                # Use subprocess.run directly for consistency with tests
                 command = step.get('command')
-                print(f"{Fore.CYAN}Executing: {command}{Style.RESET_ALL}")
-                
                 result = subprocess.run(command, shell=True, capture_output=True, text=True)
                 if result.returncode == 0:
                     print(f"{Fore.GREEN}Command executed successfully:{Style.RESET_ALL}")
@@ -2401,13 +2475,29 @@ ONLY return a valid parseable JSON array of steps, for example:
                     print(f"{Fore.RED}Command failed with error code {result.returncode}:{Style.RESET_ALL}")
                     print(result.stderr)
                 
-            elif step_type == "run_command_and_check":
+                conversation_history.append({
+                    "role": "system", 
+                    "content": f"The command '{command}' was executed with the following output:\n{result.stdout if result.returncode == 0 else result.stderr}"
+                })
+            else:
+                print(f"{Fore.YELLOW}Step skipped.{Style.RESET_ALL}")
+            
+            confirm = input(f"{Fore.YELLOW}Continue with the next steps? (y/n): {Style.RESET_ALL}")
+            if confirm.lower() != 'y':
+                break
+            continue
+        elif step_type == "run_command_and_check":
+            print(f"{Fore.CYAN}Step {i}: Run and check: {step.get('command')}{Style.RESET_ALL}")
+            print(f"Expected output: {step.get('expected_output')}")
+            confirm = input(f"{Fore.YELLOW}Do you want to execute this step? (y/n): {Style.RESET_ALL}")
+            if confirm.lower() == 'y':
+                print(f"{Fore.CYAN}Executing: {step.get('command')}{Style.RESET_ALL}")
+                
+                # Use subprocess.run directly
                 command = step.get('command')
                 expected_output = step.get('expected_output')
-                
-                print(f"{Fore.CYAN}Executing: {command}{Style.RESET_ALL}")
-                
                 result = subprocess.run(command, shell=True, capture_output=True, text=True)
+                
                 if result.returncode == 0:
                     print(f"{Fore.GREEN}Command executed successfully:{Style.RESET_ALL}")
                     print(result.stdout)
@@ -2422,9 +2512,21 @@ ONLY return a valid parseable JSON array of steps, for example:
                 else:
                     print(f"{Fore.RED}Command failed with error code {result.returncode}:{Style.RESET_ALL}")
                     print(result.stderr)
-        
-        except Exception as e:
-            print(f"{Fore.RED}Error executing step: {str(e)}{Style.RESET_ALL}")
+                
+                conversation_history.append({
+                    "role": "system", 
+                    "content": f"The command '{command}' was executed with the following output:\n{result.stdout if result.returncode == 0 else result.stderr}"
+                })
+            else:
+                print(f"{Fore.YELLOW}Step skipped.{Style.RESET_ALL}")
+            
+            confirm = input(f"{Fore.YELLOW}Continue with the next steps? (y/n): {Style.RESET_ALL}")
+            if confirm.lower() != 'y':
+                break
+            continue
+        else:
+            print(f"{Fore.RED}Unknown step type: {step_type}. Skipping.{Style.RESET_ALL}")
+            continue
         
         # Ask if the user wants to continue with the next steps
         continue_plan = input(f"{Fore.YELLOW}Continue with the next steps? (y/n): {Style.RESET_ALL}")
