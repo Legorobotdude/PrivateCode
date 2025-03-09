@@ -141,6 +141,41 @@ class TestThinkingBlocks(unittest.TestCase):
         command = code_assistant.extract_suggested_command(response)
         self.assertEqual(command, "dir")
 
+    def test_large_response_with_thinking_blocks(self):
+        """Test processing an extremely large response with multiple thinking blocks."""
+        # Create a very large response with multiple thinking blocks
+        normal_text = "This is regular text. " * 500  # 10,000 chars of regular text
+        thinking_block1 = "<think>" + ("First thinking block content. " * 1000) + "</think>"  # 28,000+ chars
+        thinking_block2 = "<think>" + ("Second thinking block with different content. " * 500) + "</think>"  # 21,500+ chars
+        
+        # Combine into a response with ~60,000 chars total
+        large_response = normal_text + thinking_block1 + "Some text between blocks. " + thinking_block2 + normal_text
+        
+        # Test with thinking disabled
+        code_assistant.SHOW_THINKING = False
+        result = code_assistant.process_thinking_blocks(large_response)
+        
+        # Verify all thinking blocks were removed
+        self.assertNotIn("<think>", result)
+        self.assertNotIn("</think>", result)
+        self.assertNotIn("First thinking block content", result)
+        self.assertNotIn("Second thinking block with different content", result)
+        
+        # Verify normal content is preserved
+        self.assertIn("This is regular text", result)
+        self.assertIn("Some text between blocks", result)
+        
+        # Test with thinking enabled
+        code_assistant.SHOW_THINKING = True
+        result = code_assistant.process_thinking_blocks(large_response)
+        
+        # Verify thinking blocks are present but truncated
+        self.assertIn("<think>", result)
+        self.assertIn("</think>", result)
+        self.assertIn("[Thinking truncated", result)
+        self.assertIn("First thinking block content", result)
+        self.assertIn("Second thinking block with different content", result)
+
 
 if __name__ == '__main__':
     unittest.main() 
