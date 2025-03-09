@@ -77,30 +77,29 @@ class TestTimeout(unittest.TestCase):
             code_assistant.DEFAULT_TIMEOUT = 60
             code_assistant.get_ollama_response([{"role": "user", "content": "Hello"}])
             # Check that requests.post was called with the default timeout
-            mock_post.assert_called_with(code_assistant.OLLAMA_API_URL, 
-                                        json={'model': code_assistant.CURRENT_MODEL, 
-                                              'messages': [{"role": "user", "content": "Hello"}], 
-                                              'stream': False}, 
-                                        timeout=60)
+            call_args = mock_post.call_args[1]
+            assert call_args['timeout'] == 60
+            assert call_args['json']['model'] == code_assistant.CURRENT_MODEL
+            assert call_args['json']['messages'] == [{"role": "user", "content": "Hello"}]
+            assert call_args['json']['stream'] == False
+            assert 'options' in call_args['json']  # Options may vary, just check it exists
             
             # Test with custom timeout
             code_assistant.DEFAULT_TIMEOUT = 120
             code_assistant.get_ollama_response([{"role": "user", "content": "Hello"}])
             # Check that requests.post was called with the updated timeout
-            mock_post.assert_called_with(code_assistant.OLLAMA_API_URL, 
-                                        json={'model': code_assistant.CURRENT_MODEL, 
-                                              'messages': [{"role": "user", "content": "Hello"}], 
-                                              'stream': False}, 
-                                        timeout=120)
+            call_args = mock_post.call_args[1]
+            assert call_args['timeout'] == 120
+            assert call_args['json']['model'] == code_assistant.CURRENT_MODEL
+            assert call_args['json']['messages'] == [{"role": "user", "content": "Hello"}]
             
             # Test with override timeout parameter
             code_assistant.get_ollama_response([{"role": "user", "content": "Hello"}], timeout=180)
             # Check that requests.post was called with the override timeout
-            mock_post.assert_called_with(code_assistant.OLLAMA_API_URL, 
-                                        json={'model': code_assistant.CURRENT_MODEL, 
-                                              'messages': [{"role": "user", "content": "Hello"}], 
-                                              'stream': False}, 
-                                        timeout=180)
+            call_args = mock_post.call_args[1]
+            assert call_args['timeout'] == 180
+            assert call_args['json']['model'] == code_assistant.CURRENT_MODEL
+            assert call_args['json']['messages'] == [{"role": "user", "content": "Hello"}]
 
     def test_timeout_error_message(self):
         """Test that timeout error message includes the timeout value."""

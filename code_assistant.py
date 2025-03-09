@@ -933,15 +933,21 @@ def extract_run_query(query):
 def extract_model_query(query):
     """Extract the model name from a model query."""
     if query.lower().startswith("model:"):
-        return query[6:].strip()
+        model = query[6:].strip()
     elif query.lower().startswith("model "):
-        return query[6:].strip()
+        model = query[6:].strip()
     elif query.lower().startswith("use model:"):
-        return query[10:].strip()
+        model = query[10:].strip()
     elif query.lower().startswith("use model "):
-        return query[10:].strip()
+        model = query[10:].strip()
     else:
-        return query
+        model = query
+    
+    # Strip quotes if present (both single and double quotes)
+    if (model.startswith("'") and model.endswith("'")) or (model.startswith('"') and model.endswith('"')):
+        model = model[1:-1].strip()
+    
+    return model
 
 
 def extract_plan_query(query):
