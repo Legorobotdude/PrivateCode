@@ -1047,6 +1047,7 @@ def get_ollama_response(history, model=None, timeout=None):
         try:
             # Send the request to Ollama with a timeout
             response = requests.post(OLLAMA_API_URL, json=payload, timeout=timeout_to_use)
+            response.raise_for_status()  # Raises HTTPError for bad responses
         except requests.exceptions.Timeout:
             error_msg = f"Request to Ollama API timed out after {timeout_to_use} seconds. The model might be taking too long to respond."
             print(f"{Fore.RED}{error_msg}{Style.RESET_ALL}")
@@ -1057,50 +1058,53 @@ def get_ollama_response(history, model=None, timeout=None):
             print(f"{Fore.RED}{error_msg}{Style.RESET_ALL}")
             print(f"{Fore.YELLOW}Please check if Ollama is still running.{Style.RESET_ALL}")
             return error_msg
-        
-        # Check if the request was successful
-        if response.status_code == 200:
-            try:
-                response_json = response.json()
-                content = response_json.get("message", {}).get("content", "")
-                if not content:
-                    print(f"{Fore.YELLOW}Warning: Received empty response from Ollama API{Style.RESET_ALL}")
-                    print(f"{Fore.YELLOW}Full response: {response_json}{Style.RESET_ALL}")
-                    return ""
-                
-                # Special handling to ensure thinking blocks are properly closed
-                # This addresses the case where a response might be truncated mid-thinking-block
-                return _sanitize_response_content(content)
-                
-            except json.JSONDecodeError:
-                error_msg = f"Error: Failed to parse JSON response from Ollama API"
+        except requests.exceptions.HTTPError as e:
+            status_code = e.response.status_code
+            if status_code == 404:
+                error_msg = f"Error: Model '{model_to_use}' not found. Please check available models and pull the model if needed."
                 print(f"{Fore.RED}{error_msg}{Style.RESET_ALL}")
-                print(f"{Fore.RED}Raw response: {response.text[:200]}...{Style.RESET_ALL}")
-                return error_msg
-        elif response.status_code == 404:
-            error_msg = f"Error: Model '{model_to_use}' not found. Please check available models and pull the model if needed."
-            print(f"{Fore.RED}{error_msg}{Style.RESET_ALL}")
-            print(f"{Fore.YELLOW}You can pull the model using: ollama pull {model_to_use}{Style.RESET_ALL}")
+                print(f"{Fore.YELLOW}You can pull the model using: ollama pull {model_to_use}{Style.RESET_ALL}")
+            elif status_code == 400:
+                error_msg = f"Error: Bad request to Ollama API. The request might be malformed."
+                print(f"{Fore.RED}{error_msg}{Style.RESET_ALL}")
+                print(f"{Fore.RED}Response: {e.response.text}{Style.RESET_ALL}")
+            elif status_code == 500:
+                error_msg = f"Error: Ollama server encountered an internal error."
+                print(f"{Fore.RED}{error_msg}{Style.RESET_ALL}")
+                print(f"{Fore.RED}Response: {e.response.text}{Style.RESET_ALL}")
+                print(f"{Fore.YELLOW}Try restarting the Ollama server.{Style.RESET_ALL}")
+            else:
+                error_msg = f"Error: Received status code {status_code} from Ollama API - {e.response.reason}"
+                print(f"{Fore.RED}{error_msg}{Style.RESET_ALL}")
+                print(f"{Fore.RED}Response: {e.response.text}{Style.RESET_ALL}")
             return error_msg
-        elif response.status_code == 400:
-            error_msg = f"Error: Bad request to Ollama API. The request might be malformed."
+        except requests.exceptions.RequestException as e:
+            error_msg = f"Request failed: {type(e).__name__} - {str(e)}"
             print(f"{Fore.RED}{error_msg}{Style.RESET_ALL}")
-            print(f"{Fore.RED}Response: {response.text}{Style.RESET_ALL}")
             return error_msg
-        elif response.status_code == 500:
-            error_msg = f"Error: Ollama server encountered an internal error."
+        
+        try:
+            response_json = response.json()
+            content = response_json.get("message", {}).get("content", "")
+            if not content:
+                error_msg = "Warning: Received empty response from Ollama API"
+                print(f"{Fore.YELLOW}{error_msg}{Style.RESET_ALL}")
+                print(f"{Fore.YELLOW}Full response: {response_json}{Style.RESET_ALL}")
+                return ""
+            
+            # Special handling to ensure thinking blocks are properly closed
+            # This addresses the case where a response might be truncated mid-thinking-block
+            return _sanitize_response_content(content)
+            
+        except json.JSONDecodeError as e:
+            error_msg = f"Error: Failed to parse JSON response from Ollama API - {str(e)}"
             print(f"{Fore.RED}{error_msg}{Style.RESET_ALL}")
-            print(f"{Fore.RED}Response: {response.text}{Style.RESET_ALL}")
-            print(f"{Fore.YELLOW}Try restarting the Ollama server.{Style.RESET_ALL}")
+            print(f"{Fore.RED}Raw response: {response.text[:200]}...{Style.RESET_ALL}")
             return error_msg
-        else:
-            error_msg = f"Error: Received status code {response.status_code} from Ollama API"
-            print(f"{Fore.RED}{error_msg}{Style.RESET_ALL}")
-            print(f"{Fore.RED}Response: {response.text}{Style.RESET_ALL}")
-            return error_msg
+            
     except Exception as e:
         error_type = type(e).__name__
-        error_msg = f"Error communicating with Ollama: {error_type} - {str(e)}"
+        error_msg = f"Unexpected error communicating with Ollama: {error_type} - {str(e)}"
         print(f"{Fore.RED}{error_msg}{Style.RESET_ALL}")
         
         # Log the full error for debugging

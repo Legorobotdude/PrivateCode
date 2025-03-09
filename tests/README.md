@@ -12,6 +12,13 @@ The test suite includes the following components:
    - Command execution and safety checks
    - Web search functionality
    - Ollama API interaction
+     - Connection verification
+     - Response handling
+     - Comprehensive error handling (timeouts, connection issues, HTTP errors, JSON parsing)
+   - Planning functionality
+     - File content inclusion
+     - Step execution
+     - Error handling
 
 2. **Benchmarks:** Performance tests to evaluate the assistant's capabilities
    - Response time measurement
@@ -44,6 +51,19 @@ python -m pytest tests/test_content_extraction.py
 python -m pytest tests/test_command_execution.py
 python -m pytest tests/test_web_search.py
 python -m pytest tests/test_ollama_api.py
+python -m pytest tests/test_plan_file_content.py
+```
+
+To run tests with verbose output:
+
+```
+python -m pytest -v tests/
+```
+
+To run tests with code coverage report:
+
+```
+python -m pytest --cov=code_assistant tests/
 ```
 
 ### Running Benchmarks
@@ -70,6 +90,55 @@ Visualization charts will be generated in the specified output directory, showin
 - Success rate by task type
 - Average time by task type
 - Success vs time correlation
+
+## Error Handling Tests
+
+We have extensive test coverage for error handling, particularly for the `get_ollama_response` function which includes tests for:
+
+1. **Network Errors**
+   - Timeouts (ensuring appropriate timeout messages)
+   - Connection errors (verifying helpful error messages)
+
+2. **HTTP Errors**
+   - 404 Not Found (model not found)
+   - 400 Bad Request
+   - 500 Internal Server Error
+   - Other status codes
+
+3. **Data Processing Errors**
+   - JSON decode errors
+   - Empty response content
+   - Malformed responses
+
+These tests ensure users receive precise, actionable error messages that help troubleshoot problems with the Ollama API integration.
+
+## Testing the Planning Functionality
+
+The planning functionality tests in `test_plan_file_content.py` verify:
+
+1. **File Content Inclusion**: Tests that file contents referenced in planning queries are correctly included in the prompt.
+2. **Multiple File Handling**: Tests that multiple files can be referenced and included in a single plan.
+3. **Edit File Steps**: Tests that edit operations are correctly parsed and can be executed.
+4. **Nonexistent File Handling**: Tests that the planner gracefully handles references to files that don't exist.
+
+### Important Notes for Testing Planning Functionality
+
+When testing the planning functionality, be aware that:
+
+1. **Direct API Calls**: The `handle_plan_query` function makes direct calls to the Ollama API using `requests.post()` rather than using the `get_ollama_response` function for some operations. Make sure to mock both:
+   ```python
+   @patch('code_assistant.get_ollama_response')
+   @patch('requests.post')
+   def test_planning_function(mock_requests_post, mock_get_response):
+       # Setup mock responses
+       mock_requests_post.return_value = MagicMock(status_code=200, ...)
+   ```
+
+2. **Multiple User Inputs**: Plan execution requires multiple user confirmations. Be sure to provide enough values for all prompts:
+   ```python
+   with patch('builtins.input', side_effect=['n', 'y', 'y', 'n']):
+       # Execute test
+   ```
 
 ## Adding New Tests
 

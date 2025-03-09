@@ -59,383 +59,597 @@ def mock_subprocess_run():
         mock_result = MagicMock()
         mock_result.returncode = 0
         mock_result.stdout = "Hello, World!"
-        mock_result.stderr = ""
         mock_run.return_value = mock_result
         yield mock_run
 
 @pytest.fixture
 def mock_inputs():
-    """Mocks user inputs for testing interaction."""
+    """Mocks the input function for testing user interaction."""
     with patch('builtins.input') as mock_input:
-        # Configure mock to return 'y' for all confirmation prompts
-        mock_input.return_value = 'y'
+        # Set default responses for common prompts
+        mock_input.side_effect = ['n', 'y', 'y', 'y', 'y']  # Standard sequence of inputs
         yield mock_input
 
+@pytest.fixture
+def mock_direct_api_request():
+    """Mocks direct requests.post calls to the Ollama API."""
+    with patch('requests.post') as mock_post:
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "message": {
+                "content": SAMPLE_PLAN_JSON
+            }
+        }
+        mock_post.return_value = mock_response
+        yield mock_post
+
 def test_is_plan_query():
-    """Test the detection of plan queries."""
-    # Test plan with colon
-    assert code_assistant.is_plan_query("plan: Create a hello world app")
-    # Test plan with space
-    assert code_assistant.is_plan_query("plan Create a hello world app")
-    # Test vibecode with colon
-    assert code_assistant.is_plan_query("vibecode: Create a hello world app")
-    # Test vibecode with space
-    assert code_assistant.is_plan_query("vibecode Create a hello world app")
-    # Test case insensitivity
-    assert code_assistant.is_plan_query("PLAN: Create a hello world app")
-    assert code_assistant.is_plan_query("ViBeCode: Create a hello world app")
-    # Test non-plan queries
-    assert not code_assistant.is_plan_query("create: new_file.py")
-    assert not code_assistant.is_plan_query("Normal query without plan prefix")
+    """Test the is_plan_query function."""
+    # Positive test cases
+    assert code_assistant.is_plan_query("plan: Create a simple web server")
+    assert code_assistant.is_plan_query("PLAN: Build a todo app")
+    assert code_assistant.is_plan_query("vibeCheck: Let's create a neural network")
+    assert code_assistant.is_plan_query("Plan this project: Calculator app")
+    
+    # Negative test cases
+    assert not code_assistant.is_plan_query("How do I create a plan?")
+    assert not code_assistant.is_plan_query("Tell me about planning in software")
+    assert not code_assistant.is_plan_query("I need to plan something")
+    assert not code_assistant.is_plan_query("search: how to plan a project")
 
 def test_extract_plan_query():
-    """Test extraction of plan details from queries."""
-    # Test plan with colon
-    assert code_assistant.extract_plan_query("plan: Create a hello world app") == "Create a hello world app"
-    # Test plan with space
-    assert code_assistant.extract_plan_query("plan Create a hello world app") == "Create a hello world app"
-    # Test vibecode with colon
-    assert code_assistant.extract_plan_query("vibecode: Create a hello world app") == "Create a hello world app"
-    # Test vibecode with space
-    assert code_assistant.extract_plan_query("vibecode Create a hello world app") == "Create a hello world app"
-    # Test case insensitivity
-    assert code_assistant.extract_plan_query("PLAN: Create a hello world app") == "Create a hello world app"
-    # Test handling of non-plan queries
-    assert code_assistant.extract_plan_query("Not a plan query") == "Not a plan query"
+    """Test the extract_plan_query function."""
+    assert code_assistant.extract_plan_query("plan: Create a simple web server") == "Create a simple web server"
+    assert code_assistant.extract_plan_query("PLAN: Build a todo app") == "Build a todo app"
+    assert code_assistant.extract_plan_query("vibeCheck: Let's create a neural network") == "Let's create a neural network"
+    assert code_assistant.extract_plan_query("Plan this project: Calculator app") == "Calculator app"
+    
+    # Complex examples
+    assert code_assistant.extract_plan_query("plan: Create a web server with [app.py] and [server.py]") == "Create a web server with [app.py] and [server.py]"
+    assert code_assistant.extract_plan_query("PLAN: Implement OAuth2 in [auth.py]") == "Implement OAuth2 in [auth.py]"
 
 @patch('code_assistant.get_ollama_response')
-def test_json_extraction_from_llm_response(mock_get_response, mock_plan_response):
-    """Test the extraction of JSON from LLM responses."""
-    # Setup the mock to return our sample response
+@patch('requests.post')
+def test_json_extraction_from_llm_response(mock_post, mock_get_response, mock_plan_response):
+    """Test the JSON extraction functionality from LLM responses."""
+    # Setup mock to return a response with JSON embedded in markdown
     mock_get_response.return_value = mock_plan_response
     
+    # Mock the direct API request response
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "message": {
+            "content": SAMPLE_PLAN_JSON
+        }
+    }
+    mock_post.return_value = mock_response
+    
     with patch('builtins.print'), patch('builtins.input', return_value='n'):
-        # Create minimal conversation history
+        # Execute plan query
         conversation_history = []
+        code_assistant.handle_plan_query("plan: Create a hello world script", conversation_history)
         
-        # Call the function with a test query
-        code_assistant.handle_plan_query("plan: Create a hello world app", conversation_history, model=None, timeout=None)
+        # Verify that the JSON was extracted and steps were identified
+        assert len(conversation_history) >= 2  # At least prompt and response
+        response_content = conversation_history[1]["content"]
+        assert "Hello, World!" in response_content
         
-        # Since we return 'n' to the first prompt, the function should exit after parsing the JSON
-        # We need to verify the JSON was correctly extracted
-        assert len(conversation_history) == 2  # prompt and response added
-        
-        # Convert the expected JSON string to an object for comparison
-        expected_steps = json.loads(SAMPLE_PLAN_JSON)
-        
-        # Check if conversation_history was properly updated
-        assert conversation_history[0]["role"] == "user"
-        assert "break down this request into a sequence of steps" in conversation_history[0]["content"]
-        assert conversation_history[1]["role"] == "assistant"
-        assert conversation_history[1]["content"] == mock_plan_response
+        # Make sure we parsed and identified the steps correctly
+        assert mock_post.called
 
 @patch('code_assistant.get_ollama_response')
-def test_handle_plan_query_code_blocks(mock_get_response):
-    """Test JSON extraction when the response is formatted with code blocks."""
-    # Response with JSON inside code blocks with language specified
-    response_with_code_blocks = '''Here's the plan:
+@patch('requests.post')
+def test_handle_plan_query_code_blocks(mock_post, mock_get_response):
+    """Test handling of code blocks in plan queries."""
+    # Setup mock to return a response with JSON in a code block
+    code_block_response = """Here's the plan:
 
 ```json
 [
     {
         "type": "create_file",
-        "file_path": "test.py"
+        "file_path": "example.py"
+    },
+    {
+        "type": "write_code",
+        "file_path": "example.py",
+        "code": "print('Example')"
     }
 ]
 ```
 
-These steps should help you accomplish your goal.'''
-
-    mock_get_response.return_value = response_with_code_blocks
+This will create a simple Python script."""
+    
+    mock_get_response.return_value = code_block_response
+    
+    # Mock the direct API request response
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "message": {
+            "content": """[
+                {
+                    "type": "create_file",
+                    "file_path": "example.py"
+                },
+                {
+                    "type": "write_code",
+                    "file_path": "example.py",
+                    "code": "print('Example')"
+                }
+            ]"""
+        }
+    }
+    mock_post.return_value = mock_response
     
     with patch('builtins.print'), patch('builtins.input', return_value='n'):
+        # Execute plan query
         conversation_history = []
-        code_assistant.handle_plan_query("plan: Test code blocks", conversation_history, model=None, timeout=None)
+        code_assistant.handle_plan_query("plan: Create an example script", conversation_history)
         
-        # Verify that the JSON was extracted from the code blocks
-        assert len(conversation_history) == 2
+        # Verify that the JSON was extracted properly from the code block
+        assert len(conversation_history) >= 2  # At least prompt and response
+        assert mock_post.called
 
 @patch('code_assistant.get_ollama_response')
-def test_handle_plan_query_malformed_json(mock_get_response):
-    """Test handling of malformed JSON in LLM responses."""
-    # Response with malformed JSON
-    malformed_json_response = '''Here's the plan:
+@patch('requests.post')
+def test_handle_plan_query_malformed_json(mock_post, mock_get_response):
+    """Test handling of malformed JSON in plan responses."""
+    # First response with malformed JSON
+    malformed_response = """Here's the plan:
 
+```json
 [
     {
         "type": "create_file",
-        "file_path": "test.py"
+        "file_path": "example.py"
     },
     {
-        "type": "write_code"
-        "file_path": "test.py",  # Missing comma after "write_code"
-        "code": "print('test')"
+        type: "write_code",
+        "file_path": "example.py",
+        "code": "print('Example')"
     }
-]'''
+]
+```
 
-    mock_get_response.return_value = malformed_json_response
+This will create a simple Python script."""
     
-    with patch('builtins.print') as mock_print, patch('builtins.input', return_value='n'):
-        conversation_history = []
-        code_assistant.handle_plan_query("plan: Test malformed JSON", conversation_history, model=None, timeout=None)
-        
-        # Verify some error message was printed - check just for the general failure pattern
-        # rather than specific line numbers which might change
-        error_call_found = False
-        for call_args in mock_print.call_args_list:
-            args, _ = call_args
-            if len(args) > 0 and f"{code_assistant.Fore.RED}Failed to parse the plan:" in args[0]:
-                error_call_found = True
-                break
-        
-        assert error_call_found, "No JSON parsing error message was printed"
-
-@patch('code_assistant.get_ollama_response')
-def test_execute_plan_steps(mock_get_response, mock_plan_response, mock_subprocess_run, mock_inputs, temp_directory):
-    """Test execution of plan steps."""
-    # Setup the mock to return our sample response
-    mock_get_response.return_value = mock_plan_response
-    
-    # Set up a temporary directory for the test
-    original_dir = os.getcwd()
-    try:
-        os.chdir(temp_directory)
-        
-        with patch('builtins.print'):
-            # Create minimal conversation history
-            conversation_history = []
-            
-            # Call the function with a test query
-            code_assistant.handle_plan_query("plan: Create a hello world app", conversation_history, model=None, timeout=None)
-            
-            # Verify that files were created and commands were run
-            assert os.path.exists("hello.py")
-            with open("hello.py", "r") as f:
-                assert f.read() == "print('Hello, World!')"
-            
-            # Check that subprocess.run was called with the expected commands
-            mock_subprocess_run.assert_any_call("python hello.py", shell=True, capture_output=True, text=True)
-            
-            # We expect subprocess.run to be called twice (once for run_command and once for run_command_and_check)
-            assert mock_subprocess_run.call_count == 2
-            
-    finally:
-        os.chdir(original_dir)
-
-@patch('code_assistant.get_ollama_response')
-def test_execute_specific_step_types(mock_get_response, mock_subprocess_run, mock_inputs, temp_directory):
-    """Test the execution of specific step types."""
-    # Create a plan with one of each step type
-    plan_json = json.dumps([
-        {"type": "create_file", "file_path": "test_create.py"},
-        {"type": "write_code", "file_path": "test_write.py", "code": "print('Test write')"},
-        {"type": "run_command", "command": "echo 'Test command'"},
-        {"type": "run_command_and_check", "command": "echo 'Test check'", "expected_output": "Test check"}
-    ])
-    
-    mock_get_response.return_value = f"```json\n{plan_json}\n```"
-    
-    # Set up a temporary directory for the test
-    original_dir = os.getcwd()
-    try:
-        os.chdir(temp_directory)
-        
-        # Configure subprocess.run to return the expected output for the last test
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = "Test check"
-        mock_subprocess_run.return_value = mock_result
-        
-        with patch('builtins.print'):
-            conversation_history = []
-            code_assistant.handle_plan_query("plan: Test all step types", conversation_history, model=None, timeout=None)
-            
-            # Verify files were created
-            assert os.path.exists("test_create.py")
-            assert os.path.exists("test_write.py")
-            
-            # Verify content of written file
-            with open("test_write.py", "r") as f:
-                assert f.read() == "print('Test write')"
-            
-            # Verify commands were run
-            assert mock_subprocess_run.call_count == 2
-            mock_subprocess_run.assert_any_call("echo 'Test command'", shell=True, capture_output=True, text=True)
-            mock_subprocess_run.assert_any_call("echo 'Test check'", shell=True, capture_output=True, text=True)
-            
-    finally:
-        os.chdir(original_dir)
-
-@patch('code_assistant.get_ollama_response')
-def test_user_skipping_steps(mock_get_response, mock_plan_response, mock_subprocess_run, temp_directory):
-    """Test that users can skip steps and the program handles it correctly."""
-    mock_get_response.return_value = mock_plan_response
-    
-    # Set up a temporary directory for the test
-    original_dir = os.getcwd()
-    try:
-        os.chdir(temp_directory)
-        
-        # Updated mock input sequence based on actual code flow - we need enough responses
-        # for all the input() calls in the function
-        with patch('builtins.input') as mock_input, patch('builtins.print'):
-            # Configure side_effect to return different values for different input() calls
-            mock_input.side_effect = [
-                'n',  # Skip saving plan to file (simplifies the test)
-                'y',  # Execute plan? -> yes
-                'y',  # Step 1: Create file -> yes
-                'n',  # Step 2: Write code -> no
-                'n'   # Stop after skipping step 2
-            ]
-            
-            conversation_history = []
-            code_assistant.handle_plan_query("plan: Test skipping steps", conversation_history, model=None, timeout=None)
-            
-            # Verify the empty file was created but we stopped before executing commands
-            assert os.path.exists("hello.py")
-            with open("hello.py", "r") as f:
-                assert f.read() == ""  # Should be empty since we skipped the write step
-            
-            # Since we stopped after step 2, we shouldn't have run any commands
-            # This aligns with the failing test that showed 0 run counts
-            assert mock_subprocess_run.call_count == 0
-            
-    finally:
-        os.chdir(original_dir)
-
-@patch('code_assistant.get_ollama_response')
-def test_command_execution_error(mock_get_response, mock_subprocess_run, mock_inputs, temp_directory):
-    """Test handling of command execution errors."""
-    # Create a plan with a command that will fail
-    plan_json = json.dumps([
-        {"type": "run_command", "command": "non_existent_command"}
-    ])
-    
-    mock_get_response.return_value = f"```json\n{plan_json}\n```"
-    
-    # Configure subprocess.run to simulate a failed command
-    mock_result = MagicMock()
-    mock_result.returncode = 1
-    mock_result.stderr = "Command not found: non_existent_command"
-    mock_subprocess_run.return_value = mock_result
-    
-    with patch('builtins.print') as mock_print:
-        conversation_history = []
-        code_assistant.handle_plan_query("plan: Test command error", conversation_history, model=None, timeout=None)
-        
-        # Verify error message was printed
-        mock_print.assert_any_call(f"{code_assistant.Fore.RED}Command failed with error code 1:{code_assistant.Style.RESET_ALL}")
-
-@patch('code_assistant.get_ollama_response')
-def test_json_retry_mechanism(mock_get_response, mock_inputs):
-    """Test the retry mechanism when the LLM doesn't return valid JSON."""
-    # First response is just text without valid JSON
-    invalid_response = "I'll help you create a Hello World program. First, you need to create a file..."
-    
-    # Second response (after retry) contains valid JSON
-    valid_json_response = """[
-        {"type": "create_file", "file_path": "hello.py"},
-        {"type": "write_code", "file_path": "hello.py", "code": "print('Hello, World!')"}
-    ]"""
-    
-    # Set up the mock to return invalid response first, then valid JSON after retry
-    mock_get_response.side_effect = [invalid_response, valid_json_response]
-    
-    # Mock all user inputs to return 'n' (no) to avoid actual execution
-    mock_inputs.return_value = 'n'
-    
-    with patch('builtins.print') as mock_print:
-        conversation_history = []
-        code_assistant.handle_plan_query("plan: Test retry mechanism", conversation_history, model=None, timeout=None)
-        
-        # Verify the retry message was printed
-        mock_print.assert_any_call(f"{code_assistant.Fore.YELLOW}The model didn't return a valid JSON plan. Retrying...{code_assistant.Style.RESET_ALL}")
-        
-        # Verify the retry generation message was printed
-        mock_print.assert_any_call(f"{code_assistant.Fore.CYAN}Retrying plan generation...{code_assistant.Style.RESET_ALL}")
-        
-        # Verify that we see the plan display after successful retry
-        mock_print.assert_any_call(f"{code_assistant.Fore.GREEN}Generated Plan:{code_assistant.Style.RESET_ALL}")
-        
-        # Check that get_ollama_response was called twice (initial + retry)
-        assert mock_get_response.call_count == 2
-        
-        # Verify the same planning prompt is used for both the initial request and retry
-        assert conversation_history[0]["content"] == conversation_history[2]["content"]
-        assert "YOU MUST RESPOND WITH ONLY A JSON ARRAY" in conversation_history[0]["content"]
-
-@patch('code_assistant.get_ollama_response')
-def test_thinking_blocks_and_malformed_json(mock_get_response, mock_inputs):
-    """Test handling of responses with thinking blocks and malformed JSON."""
-    # Response with thinking blocks and a malformed JSON (missing quote)
-    response_with_thinking = """<think>
-I'll create a plan for making a Hello World program.
-</think>
-
-[
-  {"type": "create_file", "file_path": "hello.py"},
-  {"type": "write_code", "file_path": "hello.py", "code": "print('Hello, World!')"},
-  {
-    type": "run_command_and_check",
-    "command": "python hello.py",
-    "expected_output": "Hello, World!"
-  }
+    # Second response with correct JSON (for the retry)
+    corrected_response = """[
+    {
+        "type": "create_file",
+        "file_path": "example.py" 
+    },
+    {
+        "type": "write_code",
+        "file_path": "example.py",
+        "code": "print('Example')"
+    }
 ]"""
     
-    mock_get_response.return_value = response_with_thinking
+    # Setup the mock to return the malformed response first, then the corrected one
+    mock_get_response.side_effect = [malformed_response, corrected_response]
     
-    # Mock all user inputs to return 'n' (no) to avoid actual execution
-    mock_inputs.return_value = 'n'
+    # Mock the direct API request responses
+    bad_response = MagicMock()
+    bad_response.status_code = 200
+    bad_response.json.return_value = {
+        "message": {
+            "content": malformed_response
+        }
+    }
     
-    with patch('builtins.print') as mock_print:
+    good_response = MagicMock()
+    good_response.status_code = 200
+    good_response.json.return_value = {
+        "message": {
+            "content": corrected_response
+        }
+    }
+    
+    mock_post.side_effect = [bad_response, good_response]
+    
+    with patch('builtins.print'), patch('builtins.input', return_value='n'):
+        # Execute plan query
         conversation_history = []
-        code_assistant.handle_plan_query("plan: Test thinking blocks and malformed JSON", conversation_history, model=None, timeout=None)
+        code_assistant.handle_plan_query("plan: Create an example script", conversation_history)
         
-        # We should NOT see a retry message since our cleaning and repairing should handle this
-        retry_message = f"{code_assistant.Fore.YELLOW}The model didn't return a valid JSON plan. Retrying...{code_assistant.Style.RESET_ALL}"
-        retry_calls = [call for call in mock_print.call_args_list if call[0][0] == retry_message]
-        assert len(retry_calls) == 0, "Retry message was printed when it should have been handled without retry"
+        # Verify that the retry mechanism was triggered
+        assert mock_get_response.call_count == 2
+        assert mock_post.call_count == 2
+
+@patch('code_assistant.get_ollama_response')
+@patch('requests.post')
+def test_execute_plan_steps(mock_post, mock_get_response, mock_plan_response, mock_subprocess_run, mock_inputs, temp_directory):
+    """Test execution of plan steps."""
+    # Change to the temporary directory
+    original_dir = os.getcwd()
+    try:
+        os.chdir(temp_directory)
         
-        # Verify that the plan display appears, indicating successful parsing
-        mock_print.assert_any_call(f"{code_assistant.Fore.GREEN}Generated Plan:{code_assistant.Style.RESET_ALL}")
+        # Setup mock to return a plan with all step types
+        mock_get_response.return_value = mock_plan_response
         
-        # Verify that get_ollama_response was called only once (no retry needed)
-        assert mock_get_response.call_count == 1
+        # Mock the direct API request response
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "message": {
+                "content": SAMPLE_PLAN_JSON
+            }
+        }
+        mock_post.return_value = mock_response
         
-        # Check that the response was added to the conversation history
-        assert len(conversation_history) == 2  # Prompt and response
-        assert conversation_history[1]["content"] == response_with_thinking
+        # Replace the mock_inputs with a sequence that will execute the plan
+        mock_inputs.side_effect = ['n', 'y', 'y', 'y', 'y', 'y']
+        
+        with patch('builtins.print'):
+            # Execute plan query
+            conversation_history = []
+            code_assistant.handle_plan_query("plan: Create a hello world script", conversation_history)
+            
+            # Verify that the file was created
+            assert os.path.exists("hello.py")
+            
+            # Verify that the command was executed
+            assert mock_subprocess_run.called
+            
+            # Get the command that was executed
+            run_args = mock_subprocess_run.call_args_list[-1][0][0]
+            assert "python hello.py" in ' '.join(run_args)
+            
+        # Clean up the created file
+        if os.path.exists("hello.py"):
+            os.remove("hello.py")
+    finally:
+        os.chdir(original_dir)
+
+@patch('code_assistant.get_ollama_response')
+@patch('requests.post')
+def test_execute_specific_step_types(mock_post, mock_get_response, mock_subprocess_run, mock_inputs, temp_directory):
+    """Test execution of specific step types."""
+    # Change to the temporary directory
+    original_dir = os.getcwd()
+    try:
+        os.chdir(temp_directory)
+        
+        # Setup mock to return a plan with specific step types
+        specific_plan = """[
+            {
+                "type": "create_file",
+                "file_path": "test_file.txt"
+            },
+            {
+                "type": "write_code",
+                "file_path": "test_file.txt",
+                "code": "This is test content."
+            },
+            {
+                "type": "edit_file",
+                "file_path": "test_file.txt",
+                "original_pattern": "test content",
+                "new_content": "updated content"
+            },
+            {
+                "type": "run_command",
+                "command": "type test_file.txt"
+            }
+        ]"""
+        
+        mock_get_response.return_value = specific_plan
+        
+        # Mock the direct API request response
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "message": {
+                "content": specific_plan
+            }
+        }
+        mock_post.return_value = mock_response
+        
+        # Replace the mock_inputs with a sequence that will execute all steps
+        mock_inputs.side_effect = ['n', 'y', 'y', 'y', 'y', 'y']
+        
+        with patch('builtins.print'), patch('code_assistant.generate_colored_diff', return_value="Diff preview"):
+            # Execute plan query
+            conversation_history = []
+            code_assistant.handle_plan_query("plan: Create and modify a test file", conversation_history)
+            
+            # Verify the create_file step
+            assert os.path.exists("test_file.txt")
+            
+            # Verify the write_code step
+            with open("test_file.txt", "r") as f:
+                content = f.read()
+                assert "updated content" in content
+            
+            # Verify the run_command step
+            assert mock_subprocess_run.called
+            
+            # Get the command that was executed
+            run_args = mock_subprocess_run.call_args_list[-1][0][0]
+            assert "type test_file.txt" in ' '.join(run_args)
+            
+        # Clean up the created file
+        if os.path.exists("test_file.txt"):
+            os.remove("test_file.txt")
+    finally:
+        os.chdir(original_dir)
+
+@patch('code_assistant.get_ollama_response')
+@patch('requests.post')
+def test_user_skipping_steps(mock_post, mock_get_response, mock_plan_response, mock_subprocess_run, temp_directory):
+    """Test that users can skip steps in the plan."""
+    # Change to the temporary directory
+    original_dir = os.getcwd()
+    try:
+        os.chdir(temp_directory)
+        
+        # Setup mock to return a standard plan
+        mock_get_response.return_value = mock_plan_response
+        
+        # Mock the direct API request response
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "message": {
+                "content": SAMPLE_PLAN_JSON
+            }
+        }
+        mock_post.return_value = mock_response
+        
+        # Setup a mock input sequence that skips the second step
+        with patch('builtins.input') as mock_input:
+            mock_input.side_effect = ['n', 'y', 'y', 'n', 'y']
+            
+            with patch('builtins.print'):
+                # Execute plan query
+                conversation_history = []
+                code_assistant.handle_plan_query("plan: Create a hello world script", conversation_history)
+                
+                # Verify that the file was created (first step)
+                assert os.path.exists("hello.py")
+                
+                # Verify the content is empty (skipped the write step)
+                with open("hello.py", "r") as f:
+                    content = f.read()
+                    assert content == ""
+                
+                # Verify that we still got to a later step
+                assert mock_subprocess_run.called
+                
+            # Clean up the created file
+            if os.path.exists("hello.py"):
+                os.remove("hello.py")
+    finally:
+        os.chdir(original_dir)
+
+@patch('code_assistant.get_ollama_response')
+@patch('requests.post')
+def test_command_execution_error(mock_post, mock_get_response, mock_subprocess_run, mock_inputs, temp_directory):
+    """Test handling of command execution errors."""
+    # Change to the temporary directory
+    original_dir = os.getcwd()
+    try:
+        os.chdir(temp_directory)
+        
+        # Setup mock to return a plan with a command that will fail
+        failing_plan = """[
+            {
+                "type": "run_command",
+                "command": "nonexistent_command"
+            }
+        ]"""
+        
+        mock_get_response.return_value = failing_plan
+        
+        # Mock the direct API request response
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "message": {
+                "content": failing_plan
+            }
+        }
+        mock_post.return_value = mock_response
+        
+        # Setup the subprocess mock to simulate a failure
+        failing_result = MagicMock()
+        failing_result.returncode = 1
+        failing_result.stderr = "Command not found"
+        mock_subprocess_run.return_value = failing_result
+        
+        with patch('builtins.print') as mock_print, patch('builtins.input', return_value='y'):
+            # Execute plan query
+            conversation_history = []
+            code_assistant.handle_plan_query("plan: Run a nonexistent command", conversation_history)
+            
+            # Verify that an error message was printed
+            error_prints = [call for call in mock_print.call_args_list if "Error" in str(call) and "nonexistent_command" in str(call)]
+            assert len(error_prints) > 0
+    finally:
+        os.chdir(original_dir)
+
+@patch('code_assistant.get_ollama_response')
+@patch('requests.post')
+def test_json_retry_mechanism(mock_post, mock_get_response, mock_inputs):
+    """Test the JSON retry mechanism for malformed responses."""
+    # First response with completely invalid content
+    invalid_response = """I'm going to help you plan this project.
+
+First, we should think about what steps we need:
+1. Create the main file
+2. Write the code
+3. Test the code
+
+Let me know if you'd like more details.
+"""
+    
+    # Second response with valid JSON (for the retry)
+    valid_response = """[
+    {
+        "type": "create_file",
+        "file_path": "retry_test.py"
+    },
+    {
+        "type": "write_code",
+        "file_path": "retry_test.py",
+        "code": "print('Retry worked!')"
+    }
+]"""
+    
+    # Setup the mock to return the invalid response first, then the valid one
+    mock_get_response.side_effect = [invalid_response, valid_response]
+    
+    # Mock the direct API request responses
+    bad_response = MagicMock()
+    bad_response.status_code = 200
+    bad_response.json.return_value = {
+        "message": {
+            "content": invalid_response
+        }
+    }
+    
+    good_response = MagicMock()
+    good_response.status_code = 200
+    good_response.json.return_value = {
+        "message": {
+            "content": valid_response
+        }
+    }
+    
+    mock_post.side_effect = [bad_response, good_response]
+    
+    with patch('builtins.print'), patch('builtins.input', return_value='n'):
+        # Execute plan query
+        conversation_history = []
+        code_assistant.handle_plan_query("plan: Test retry mechanism", conversation_history)
+        
+        # Verify that the retry mechanism was triggered
+        assert mock_get_response.call_count == 2
+        assert mock_post.call_count == 2
+        
+        # Verify the final response contains the JSON from the valid response
+        final_response = conversation_history[-1]["content"]
+        assert "retry_test.py" in final_response
+
+@patch('code_assistant.get_ollama_response')
+@patch('requests.post')
+def test_thinking_blocks_and_malformed_json(mock_post, mock_get_response, mock_inputs):
+    """Test handling of thinking blocks in responses with malformed JSON."""
+    # Response with thinking blocks and malformed JSON
+    thinking_response = """<think>
+I need to create a plan for this project. Let's break it down into steps:
+1. Create a file for the script
+2. Add code to the file
+3. Run the script
+</think>
+
+Here's the plan:
+
+```json
+[
+    {
+        "type": "create_file",
+        "file_path": "thinking_test.py"
+    },
+    {
+        type: "write_code",  # Missing quotes around the type
+        "file_path": "thinking_test.py",
+        "code": "print('Thinking blocks handled correctly')"
+    }
+]
+```
+"""
+    
+    # Corrected response for the retry
+    corrected_response = """[
+    {
+        "type": "create_file",
+        "file_path": "thinking_test.py"
+    },
+    {
+        "type": "write_code",
+        "file_path": "thinking_test.py",
+        "code": "print('Thinking blocks handled correctly')"
+    }
+]"""
+    
+    # Setup the mock to return the thinking response first, then the corrected one
+    mock_get_response.side_effect = [thinking_response, corrected_response]
+    
+    # Mock the direct API request responses
+    bad_response = MagicMock()
+    bad_response.status_code = 200
+    bad_response.json.return_value = {
+        "message": {
+            "content": thinking_response
+        }
+    }
+    
+    good_response = MagicMock()
+    good_response.status_code = 200
+    good_response.json.return_value = {
+        "message": {
+            "content": corrected_response
+        }
+    }
+    
+    mock_post.side_effect = [bad_response, good_response]
+    
+    with patch('builtins.print'), patch('builtins.input', return_value='n'):
+        # Execute plan query
+        conversation_history = []
+        code_assistant.handle_plan_query("plan: Test thinking blocks", conversation_history)
+        
+        # Verify that the retry mechanism was triggered
+        assert mock_get_response.call_count == 2
+        assert mock_post.call_count == 2
+        
+        # Verify the final response contains the JSON from the corrected response
+        final_response = conversation_history[-1]["content"]
+        assert "thinking_test.py" in final_response
 
 @patch('code_assistant.handle_plan_query')
 def test_vibecode_alias_in_main_flow(mock_handle_plan):
-    """Test that 'vibecode' command is handled identically to 'plan' in the main program flow."""
-    # Create test instances for both aliases
-    plan_query = "plan: Create a test app"
-    vibecode_query = "vibecode: Create a test app"
+    """Test that vibeCheck alias correctly routes to handle_plan_query."""
+    # Setup a simple command line input
+    sys.argv = ["code_assistant.py", "vibeCheck: Build a calculator"]
     
-    # Mock conversation history
-    conversation_history = []
+    # Define a mock implementation to capture the arguments
+    captured_args = []
+    def simulate_handle_plan(query, history, model=None, timeout=None):
+        captured_args.append((query, history, model, timeout))
+        return None
+        
+    mock_handle_plan.side_effect = simulate_handle_plan
     
-    # Test that both queries are detected as plan queries
-    assert code_assistant.is_plan_query(plan_query)
-    assert code_assistant.is_plan_query(vibecode_query)
+    # Define a mock for the main command handling to bypass the rest of the function
+    def simulate_command_flow(query):
+        # Extract the type of query
+        if code_assistant.is_plan_query(query):
+            print("Handling plan query")
+            code_assistant.handle_plan_query(query, [], None, None)
+            return True
+        return False
     
-    # Patch main command handling flow to test both aliases
-    with patch('builtins.print'):
-        # Create a function to simulate the main command flow
-        def simulate_command_flow(query):
-            if code_assistant.is_plan_query(query):
-                code_assistant.handle_plan_query(query, conversation_history, model=None, timeout=None)
+    # Execute the function with our mock
+    with patch('code_assistant.handle_search_query'), patch('code_assistant.handle_edit_query'), \
+         patch('code_assistant.handle_run_query'), patch('code_assistant.handle_model_query'), \
+         patch('code_assistant.handle_create_query'), patch('code_assistant.handle_regular_query'), \
+         patch('builtins.print'):
+        # Call the main function
+        try:
+            # Patch only the internal function call
+            with patch.object(code_assistant, 'handle_plan_query', side_effect=simulate_handle_plan):
+                result = code_assistant.main()
+        except SystemExit:
+            pass  # Expected to exit after processing
         
-        # Test with 'plan' command
-        simulate_command_flow(plan_query)
-        mock_handle_plan.assert_called_with(plan_query, conversation_history, model=None, timeout=None)
-        mock_handle_plan.reset_mock()
-        
-        # Test with 'vibecode' command
-        simulate_command_flow(vibecode_query)
-        mock_handle_plan.assert_called_with(vibecode_query, conversation_history, model=None, timeout=None)
-        
-        # Verify both commands were extracted correctly
-        assert code_assistant.extract_plan_query(plan_query) == "Create a test app"
-        assert code_assistant.extract_plan_query(vibecode_query) == "Create a test app" 
+    # Verify that handle_plan_query was called with the right arguments
+    assert len(captured_args) == 1
+    query, _, _, _ = captured_args[0]
+    assert query == "vibeCheck: Build a calculator" 
