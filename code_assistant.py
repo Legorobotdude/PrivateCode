@@ -1300,46 +1300,127 @@ def clean_explanatory_text(content):
     return content
 
 
-def process_thinking_blocks(content):
-    """Process thinking blocks in the content.
+def process_thinking_blocks(content, chunk_size=10000):
+    """Process thinking blocks in chunks to handle extremely large responses.
     
-    Removes or truncates thinking blocks based on user preferences.
+    Breaks down large responses into manageable chunks for regex processing,
+    which helps prevent timeouts or excessive memory usage.
+    
+    Args:
+        content (str): The raw response content from Ollama.
+        chunk_size (int): Size of chunks to process at once.
+        
+    Returns:
+        str: The processed content with thinking blocks handled.
     """
     global SHOW_THINKING, MAX_THINKING_LENGTH
     
     if not content:
         return content
-    
-    # Check if there are thinking blocks
-    think_pattern = re.compile(r'<think>(.*?)</think>', re.DOTALL)
-    
-    # First, check if we have any thinking blocks
+        
+    # Quick early return if no thinking blocks
     if '<think>' not in content:
         return content
-    
-    # If thinking is disabled (default), simply remove all thinking blocks
+        
+    # If thinking is disabled, use a single regex operation for simplicity and reliability
     if not SHOW_THINKING:
-        # Use regex to remove all thinking blocks
         return re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL)
     
-    # If thinking is enabled but needs truncation
+    # For showing thinking blocks
+    STRICT_MAX_THINKING_LENGTH = 1000  # Strict upper limit to prevent overflow
+    
+    # Respect user-configured MAX_THINKING_LENGTH, but cap it at STRICT_MAX_THINKING_LENGTH
+    effective_max_length = min(MAX_THINKING_LENGTH, STRICT_MAX_THINKING_LENGTH)
+    
+    # For smaller content, use a simple direct approach (no chunking)
+    if len(content) <= chunk_size:
+        return _process_thinking_blocks_simple(content, effective_max_length)
+    
+    # For larger content, process in chunks
+    return _process_thinking_blocks_chunked(content, effective_max_length, chunk_size)
+
+
+def _process_thinking_blocks_simple(content, max_length):
+    """Process thinking blocks in a simple way for smaller content.
+    
+    Args:
+        content (str): The content to process.
+        max_length (int): Maximum length of thinking blocks to show.
+        
+    Returns:
+        str: The processed content.
+    """
+    think_pattern = re.compile(r'<think>(.*?)</think>', re.DOTALL)
     result = content
+    
+    # Find all thinking blocks
     matches = list(think_pattern.finditer(content))
     
-    # Process each thinking block
-    for match in reversed(matches):  # Process in reverse to maintain indices
+    # Process each block
+    for match in reversed(matches):
         thinking_content = match.group(1)
         start, end = match.span()
         
-        # Truncate if too long
-        if len(thinking_content) > MAX_THINKING_LENGTH:
-            truncated = thinking_content[:MAX_THINKING_LENGTH] + f"\n... [Thinking truncated, {len(thinking_content) - MAX_THINKING_LENGTH} more characters] ..."
-            # Use <thinking> tags for truncated blocks to match the test expectations
+        # Truncate if longer than max_length
+        if len(thinking_content) > max_length:
+            truncated = (
+                thinking_content[:max_length] +
+                f"\n... [Thinking truncated, {len(thinking_content) - max_length} more characters] ..."
+            )
             result = result[:start] + f"<thinking>\n{truncated}\n</thinking>" + result[end:]
-        # Otherwise, we keep the original <think> tags
     
-    # The result should maintain the <think> tags when SHOW_THINKING is true
     return result
+
+
+def _process_thinking_blocks_chunked(content, max_length, chunk_size):
+    """Process thinking blocks in chunks for large content.
+    
+    Args:
+        content (str): The content to process.
+        max_length (int): Maximum length of thinking blocks to show.
+        chunk_size (int): Size of chunks to process.
+        
+    Returns:
+        str: The processed content.
+    """
+    # Use a simpler and more reliable chunking approach
+    processed_chunks = []
+    
+    # First, split content at thinking tags to ensure we don't split within tags
+    parts = re.split(r'(<think>|</think>)', content)
+    
+    inside_thinking = False
+    current_thinking = ""
+    processed_content = ""
+    
+    for part in parts:
+        if part == "<think>":
+            inside_thinking = True
+            current_thinking = ""
+            processed_content += part  # Keep the opening tag
+        elif part == "</think>":
+            inside_thinking = False
+            
+            # Process the thinking content if needed
+            if len(current_thinking) > max_length:
+                # Truncate and change tags
+                truncated = (
+                    current_thinking[:max_length] +
+                    f"\n... [Thinking truncated, {len(current_thinking) - max_length} more characters] ..."
+                )
+                # Replace the last opening tag with <thinking>
+                processed_content = processed_content.rstrip("<think>") + "<thinking>\n" + truncated + "\n</thinking>"
+            else:
+                # Keep the original thinking content
+                processed_content += current_thinking + part
+        elif inside_thinking:
+            # Accumulate thinking content
+            current_thinking += part
+        else:
+            # Regular content outside thinking blocks
+            processed_content += part
+    
+    return processed_content
 
 
 def toggle_thinking_display():

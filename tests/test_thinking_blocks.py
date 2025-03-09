@@ -68,6 +68,15 @@ class TestThinkingBlocks(unittest.TestCase):
         result = code_assistant.process_thinking_blocks(content)
         self.assertTrue("<think>First thinking</think>" in result)
         self.assertTrue("<think>Second thinking</think>" in result)
+        
+        # Verify that non-truncated thinking blocks keep their original <think> tags
+        # and only truncated blocks get <thinking> tags
+        code_assistant.MAX_THINKING_LENGTH = 5
+        content = "Regular <think>Short</think> and <think>Very long thinking</think>."
+        result = code_assistant.process_thinking_blocks(content)
+        self.assertTrue("<think>Short</think>" in result)  # Short block keeps original tags
+        self.assertTrue("<thinking>" in result)  # Long block gets converted to <thinking> tags
+        self.assertTrue("[Thinking truncated" in result)  # Long block gets truncated message
 
     def test_process_thinking_blocks_truncated(self):
         """Test that thinking blocks are truncated when too long."""
@@ -77,7 +86,7 @@ class TestThinkingBlocks(unittest.TestCase):
         # Test with a thinking block longer than the max length
         content = "Hello, <think>This is a very long thinking block that should be truncated</think> world!"
         result = code_assistant.process_thinking_blocks(content)
-        self.assertTrue("<thinking>" in result)
+        self.assertTrue("<thinking>" in result)  # Truncated blocks are wrapped in <thinking> tags
         self.assertTrue("[Thinking truncated" in result)
         self.assertTrue("world!" in result)
         
@@ -85,7 +94,7 @@ class TestThinkingBlocks(unittest.TestCase):
         large_thinking = "X" * 10000
         content = f"Start <think>{large_thinking}</think> end."
         result = code_assistant.process_thinking_blocks(content)
-        self.assertTrue("<thinking>" in result)
+        self.assertTrue("<thinking>" in result)  # Truncated blocks are wrapped in <thinking> tags
         self.assertTrue("[Thinking truncated" in result)
         self.assertTrue("end." in result)
 
@@ -141,6 +150,35 @@ class TestThinkingBlocks(unittest.TestCase):
         command = code_assistant.extract_suggested_command(response)
         self.assertEqual(command, "dir")
 
+    def test_debug_large_thinking_truncation(self):
+        """A simplified test to debug the thinking truncation issue."""
+        # Setup
+        code_assistant.SHOW_THINKING = True
+        code_assistant.MAX_THINKING_LENGTH = 10  # Very small limit to ensure truncation
+        
+        # Create a moderately large thinking block (should be smaller than chunk_size)
+        thinking_content = "X" * 1000  # 1000 Xs
+        content = f"Before <think>{thinking_content}</think> After"
+        
+        # Process the content
+        result = code_assistant.process_thinking_blocks(content)
+        
+        # Print debug info to help us understand what's happening
+        print(f"\nDEBUG - Result length: {len(result)}")
+        print(f"DEBUG - Original length: {len(content)}")
+        print(f"DEBUG - Contains '<thinking>': {'<thinking>' in result}")
+        print(f"DEBUG - Contains '<think>': {'<think>' in result}")
+        print(f"DEBUG - Contains 'truncated': {'truncated' in result}")
+        print(f"DEBUG - First 50 chars: {result[:50]}")
+        print(f"DEBUG - Last 50 chars: {result[-50:]}")
+        
+        # Check if the thinking was properly truncated
+        self.assertTrue("<thinking>" in result)
+        self.assertFalse("<think>" in result)  # Original tag should be gone
+        self.assertTrue("[Thinking truncated" in result)
+        self.assertTrue("Before" in result)
+        self.assertTrue("After" in result)
+
     def test_large_response_with_thinking_blocks(self):
         """Test processing an extremely large response with multiple thinking blocks."""
         # Create a very large response with a single massive thinking block
@@ -171,9 +209,9 @@ class TestThinkingBlocks(unittest.TestCase):
         code_assistant.SHOW_THINKING = True
         result = code_assistant.process_thinking_blocks(large_response)
         
-        # Verify thinking block is present but truncated
-        self.assertIn("<think>", result)
-        self.assertIn("</think>", result)
+        # Verify thinking block is present but truncated - using <thinking> tags for truncated content
+        self.assertIn("<thinking>", result)
+        self.assertIn("</thinking>", result)
         self.assertIn("[Thinking truncated", result)
         self.assertIn("This is a very large thinking block", result)
         
