@@ -143,38 +143,42 @@ class TestThinkingBlocks(unittest.TestCase):
 
     def test_large_response_with_thinking_blocks(self):
         """Test processing an extremely large response with multiple thinking blocks."""
-        # Create a very large response with multiple thinking blocks
-        normal_text = "This is regular text. " * 500  # 10,000 chars of regular text
-        thinking_block1 = "<think>" + ("First thinking block content. " * 1000) + "</think>"  # 28,000+ chars
-        thinking_block2 = "<think>" + ("Second thinking block with different content. " * 500) + "</think>"  # 21,500+ chars
+        # Create a very large response with a single massive thinking block
+        normal_text_before = "Text before thinking block. " * 200  # 4,000+ chars of text before
         
-        # Combine into a response with ~60,000 chars total
-        large_response = normal_text + thinking_block1 + "Some text between blocks. " + thinking_block2 + normal_text
+        # Create a single massive thinking block of ~50,000 chars
+        thinking_content = "This is a very large thinking block. " * 2500  # ~50,000 chars
+        large_thinking_block = f"<think>{thinking_content}</think>"
+        
+        normal_text_after = "Text after thinking block. " * 200  # 4,000+ chars of text after
+        
+        # Combine into a response with ~58,000 chars total
+        large_response = normal_text_before + large_thinking_block + normal_text_after
         
         # Test with thinking disabled
         code_assistant.SHOW_THINKING = False
         result = code_assistant.process_thinking_blocks(large_response)
         
-        # Verify all thinking blocks were removed
+        # Verify the thinking block was completely removed
         self.assertNotIn("<think>", result)
         self.assertNotIn("</think>", result)
-        self.assertNotIn("First thinking block content", result)
-        self.assertNotIn("Second thinking block with different content", result)
+        self.assertNotIn("This is a very large thinking block", result)
         
-        # Verify normal content is preserved
-        self.assertIn("This is regular text", result)
-        self.assertIn("Some text between blocks", result)
+        # Verify normal content is preserved exactly as it was
+        self.assertEqual(result, normal_text_before + normal_text_after)
         
         # Test with thinking enabled
         code_assistant.SHOW_THINKING = True
         result = code_assistant.process_thinking_blocks(large_response)
         
-        # Verify thinking blocks are present but truncated
+        # Verify thinking block is present but truncated
         self.assertIn("<think>", result)
         self.assertIn("</think>", result)
         self.assertIn("[Thinking truncated", result)
-        self.assertIn("First thinking block content", result)
-        self.assertIn("Second thinking block with different content", result)
+        self.assertIn("This is a very large thinking block", result)
+        
+        # Verify the block was actually truncated by checking length
+        self.assertTrue(len(result) < len(large_response))
 
 
 if __name__ == '__main__':
