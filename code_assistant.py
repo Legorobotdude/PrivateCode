@@ -1035,7 +1035,11 @@ def get_ollama_response(history, model=None, timeout=None):
         payload = {
             "model": model_to_use,
             "messages": history,
-            "stream": False
+            "stream": False,
+            "options": {
+                "max_tokens": 4000,  # Limit response length to prevent truncation
+                "temperature": 0.7   # Standard creativity setting
+            }
         }
         
         print(f"{Fore.CYAN}Sending request to Ollama API using model: {model_to_use}{Style.RESET_ALL}")
@@ -1062,7 +1066,12 @@ def get_ollama_response(history, model=None, timeout=None):
                 if not content:
                     print(f"{Fore.YELLOW}Warning: Received empty response from Ollama API{Style.RESET_ALL}")
                     print(f"{Fore.YELLOW}Full response: {response_json}{Style.RESET_ALL}")
-                return content
+                    return ""
+                
+                # Special handling to ensure thinking blocks are properly closed
+                # This addresses the case where a response might be truncated mid-thinking-block
+                return _sanitize_response_content(content)
+                
             except json.JSONDecodeError:
                 error_msg = f"Error: Failed to parse JSON response from Ollama API"
                 print(f"{Fore.RED}{error_msg}{Style.RESET_ALL}")
@@ -1100,6 +1109,47 @@ def get_ollama_response(history, model=None, timeout=None):
         traceback.print_exc()
         
         return error_msg
+
+
+def _sanitize_response_content(content):
+    """Sanitize the response content to ensure thinking blocks are properly formed.
+    
+    This function handles cases where thinking blocks might be truncated or malformed
+    in the response from the API.
+    
+    Args:
+        content (str): The raw response content from Ollama API.
+        
+    Returns:
+        str: Sanitized content with properly formed thinking blocks.
+    """
+    if not content:
+        return content
+        
+    # Check for mismatched thinking tags
+    think_open_count = content.count("<think>")
+    think_close_count = content.count("</think>")
+    
+    # If we have unclosed thinking blocks (more opens than closes)
+    if think_open_count > think_close_count:
+        print(f"{Fore.YELLOW}Warning: Detected {think_open_count - think_close_count} unclosed thinking block(s) in response{Style.RESET_ALL}")
+        
+        # Find the last position of an unclosed <think> tag
+        last_think_pos = content.rfind("<think>")
+        last_close_pos = content.rfind("</think>")
+        
+        if last_think_pos > last_close_pos:
+            # We have an unclosed think tag at the end
+            # Truncate the content at the last unclosed <think> tag to prevent leaking
+            # This is safer than trying to add closing tags which might be incorrect
+            content = content[:last_think_pos]
+            print(f"{Fore.YELLOW}Truncated response at unclosed thinking block{Style.RESET_ALL}")
+    
+    # Handle any standalone think tags that might cause issues
+    # This happens if we have mismatched tags elsewhere in the content
+    content = re.sub(r'<think>[^<]*$', '', content)  # Remove trailing incomplete thinking blocks
+    
+    return content
 
 
 def extract_modified_content(response, file_path):
@@ -1322,22 +1372,46 @@ def process_thinking_blocks(content, chunk_size=10000):
     if '<think>' not in content:
         return content
         
-    # If thinking is disabled, use a single regex operation for simplicity and reliability
-    if not SHOW_THINKING:
-        return re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL)
-    
-    # For showing thinking blocks
-    STRICT_MAX_THINKING_LENGTH = 1000  # Strict upper limit to prevent overflow
-    
-    # Respect user-configured MAX_THINKING_LENGTH, but cap it at STRICT_MAX_THINKING_LENGTH
-    effective_max_length = min(MAX_THINKING_LENGTH, STRICT_MAX_THINKING_LENGTH)
-    
-    # For smaller content, use a simple direct approach (no chunking)
+    # For smaller content, use direct regex regardless of show/hide setting
     if len(content) <= chunk_size:
-        return _process_thinking_blocks_simple(content, effective_max_length)
+        if not SHOW_THINKING:
+            return re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL)
+        else:
+            return _process_thinking_blocks_simple(content, min(MAX_THINKING_LENGTH, 1000))
     
-    # For larger content, process in chunks
-    return _process_thinking_blocks_chunked(content, effective_max_length, chunk_size)
+    # For larger content, always use chunking approach regardless of show/hide setting
+    if not SHOW_THINKING:
+        return _remove_thinking_blocks_chunked(content, chunk_size)
+    else:
+        return _process_thinking_blocks_chunked(content, min(MAX_THINKING_LENGTH, 1000), chunk_size)
+
+
+def _remove_thinking_blocks_chunked(content, chunk_size):
+    """Remove thinking blocks using a chunked approach for large content.
+    
+    Args:
+        content (str): The content to process.
+        chunk_size (int): Size of chunks to process.
+        
+    Returns:
+        str: The content with all thinking blocks removed.
+    """
+    # Split at tag boundaries to ensure reliable processing
+    parts = re.split(r'(<think>|</think>)', content)
+    
+    inside_thinking = False
+    result = []
+    
+    for part in parts:
+        if part == "<think>":
+            inside_thinking = True
+        elif part == "</think>":
+            inside_thinking = False
+        elif not inside_thinking:
+            # Only keep content outside of thinking blocks
+            result.append(part)
+    
+    return ''.join(result)
 
 
 def _process_thinking_blocks_simple(content, max_length):
@@ -1664,7 +1738,7 @@ def main():
                 elif create_mode:
                     handle_create_query(user_input, conversation_history)
                 elif plan_mode:
-                    handle_plan_query(user_input, conversation_history)
+                    handle_plan_query(user_input, conversation_history, model=CURRENT_MODEL, timeout=DEFAULT_TIMEOUT)
                 else:
                     handle_regular_query(user_input, conversation_history)
             except Exception as e:
@@ -2196,10 +2270,16 @@ def handle_regular_query(user_input, conversation_history):
         print(f"{Fore.RED}Failed to get a response from the model.{Style.RESET_ALL}")
 
 
-def handle_plan_query(user_input, conversation_history):
+def handle_plan_query(user_input, conversation_history, model=None, timeout=None):
     """
     Handle planning queries by breaking down high-level requests into executable steps.
     The steps are presented to the user for review and can be executed with confirmation.
+    
+    Args:
+        user_input (str): The user's planning query
+        conversation_history (list): The conversation history
+        model (str, optional): The model to use for generating the plan
+        timeout (int, optional): The timeout for API requests in seconds
     """
     import json
     from pathlib import Path
@@ -2229,10 +2309,41 @@ def handle_plan_query(user_input, conversation_history):
         for file_path, content in file_contents.items():
             file_context += f"--- {file_path} ---\n{content}\n\n"
     
-    # Construct a strong prompt for the LLM with clear instructions
-    planning_prompt = f"""You are an AI assistant helping a user to implement a project. The user's request is: {plan_description}
+    # STEP 1: Analysis phase - Ask the model to understand the task without requiring a specific output format
+    analysis_prompt = f"""You are an AI assistant helping a user to implement a project. The user's request is: {plan_description}
 
-{file_context}Your task is to break down this request into a sequence of steps that the program can execute. Each step should be one of the following types:
+{file_context}Your task is to analyze this request and understand what needs to be done. 
+Think about the approach you would take to implement this request, but DO NOT output a plan yet.
+Just analyze the requirements, potential code structures, and approach.
+
+Keep your response relatively brief - focus on understanding the task, not implementing it yet.
+"""
+    
+    # Add the analysis prompt to the conversation history
+    conversation_history.append({"role": "user", "content": analysis_prompt})
+    
+    # Print "Analyzing request..." to indicate processing
+    print(f"{Fore.CYAN}Analyzing request...{Style.RESET_ALL}")
+    
+    # Get the response from Ollama for the analysis phase
+    analysis_response = get_ollama_response(conversation_history, model=model, timeout=timeout)
+    
+    if not analysis_response:
+        print(f"{Fore.RED}Failed to get an analysis from the model.{Style.RESET_ALL}")
+        return
+    
+    # Process thinking blocks for display
+    processed_analysis = process_thinking_blocks(analysis_response)
+    print(f"{Fore.GREEN}Analysis:{Style.RESET_ALL}")
+    print(f"{Fore.GREEN}{processed_analysis}{Style.RESET_ALL}")
+    
+    # Add the assistant's analysis to the conversation history
+    conversation_history.append({"role": "assistant", "content": analysis_response})
+    
+    # STEP 2: Planning phase - Now ask for a concise, structured plan with minimal thinking
+    # Configure a payload with options that encourage short, focused output
+    planning_prompt = f"""Now, based on your analysis, provide a step-by-step plan to implement the request.
+Your task is to break down this request into a sequence of steps that the program can execute. Each step should be one of the following types:
 
 create_file: with 'file_path' parameter, which is a path relative to the working directory.
 write_code: with 'file_path' and 'code' parameters. 'file_path' is relative to the working directory, and 'code' is the exact code to write to the file, which will overwrite any existing content.
@@ -2247,20 +2358,8 @@ YOU MUST RESPOND WITH ONLY A JSON ARRAY containing steps with these exact format
 4. {{"type": "run_command", "command": "python example.py"}}
 5. {{"type": "run_command_and_check", "command": "python example.py", "expected_output": "Hello"}}
 
-IMPORTANT RULES:
-- Do not include <think> or </think> tags in your response
-- Do not include explanations, markdown formatting, or anything other than the raw JSON array
-- Ensure all JSON keys have proper quotes
-- Only use the step types listed above
-- Make sure the generated plan can be executed with user confirmation
-
-ONLY return a valid parseable JSON array of steps, for example:
-[
-  {{"type": "create_file", "file_path": "main.py"}},
-  {{"type": "write_code", "file_path": "main.py", "code": "print('Hello, World!')"}},
-  {{"type": "edit_file", "file_path": "existing.py", "original_pattern": "def old_function():", "new_content": "def new_function():"}},
-  {{"type": "run_command", "command": "python main.py"}}
-]"""
+IMPORTANT: Keep your response EXTREMELY CONCISE. ONLY return a valid JSON array of steps, nothing else. NO explanations, NO thinking, NO markdown.
+"""
     
     # Add the planning prompt to the conversation history
     conversation_history.append({"role": "user", "content": planning_prompt})
@@ -2268,19 +2367,46 @@ ONLY return a valid parseable JSON array of steps, for example:
     # Print "Generating plan..." to indicate processing
     print(f"{Fore.CYAN}Generating plan...{Style.RESET_ALL}")
     
-    # Get the response from Ollama
-    response = get_ollama_response(conversation_history)
+    # Get the response from Ollama with specific options to encourage brief output
+    try:
+        # Prepare the request payload with options to limit response size
+        payload = {
+            "model": model or CURRENT_MODEL,
+            "messages": conversation_history,
+            "stream": False,
+            "options": {
+                "max_tokens": 2000,    # Set a tighter limit for the plan
+                "temperature": 0.1,    # Lower temperature for more deterministic output
+                "top_p": 0.1           # Narrow token selection for more focused output
+            }
+        }
+        
+        # Send a direct request to the Ollama API
+        response = requests.post(OLLAMA_API_URL, json=payload, timeout=timeout or DEFAULT_TIMEOUT)
+        
+        # Process the response
+        if response.status_code == 200:
+            response_json = response.json()
+            plan_response = response_json.get("message", {}).get("content", "")
+        else:
+            print(f"{Fore.RED}Error: Received status code {response.status_code} from Ollama API{Style.RESET_ALL}")
+            print(f"{Fore.RED}Response: {response.text}{Style.RESET_ALL}")
+            return
+    except Exception as e:
+        print(f"{Fore.RED}Error during plan generation: {str(e)}{Style.RESET_ALL}")
+        return
     
-    if not response:
+    if not plan_response:
         print(f"{Fore.RED}Failed to get a plan from the model.{Style.RESET_ALL}")
         return
     
     # Process thinking blocks for display
-    processed_response = process_thinking_blocks(response)
+    processed_response = process_thinking_blocks(plan_response)
+    print(f"{Fore.GREEN}Plan:{Style.RESET_ALL}")
     print(f"{Fore.GREEN}{processed_response}{Style.RESET_ALL}")
     
     # Add the assistant's response to the conversation history
-    conversation_history.append({"role": "assistant", "content": response})
+    conversation_history.append({"role": "assistant", "content": plan_response})
     
     # Try to extract JSON from the response
     steps = None
@@ -2292,11 +2418,33 @@ ONLY return a valid parseable JSON array of steps, for example:
         
         # Create a copy of the response for JSON extraction
         # This way we preserve the original response with thinking blocks
-        json_extraction_response = response
+        json_extraction_response = plan_response
         
-        # Remove thinking blocks
-        json_extraction_response = re.sub(r'<think>.*?</think>', '', json_extraction_response, flags=re.DOTALL)
-        # Remove standalone think tags
+        # First, check for mismatched thinking tags which would cause problems
+        think_open_count = json_extraction_response.count("<think>")
+        think_close_count = json_extraction_response.count("</think>")
+        
+        # More robust thinking block removal
+        if think_open_count != think_close_count:
+            # If tags don't match, use our split-based approach which is more reliable
+            parts = re.split(r'(<think>|</think>)', json_extraction_response)
+            inside_thinking = False
+            clean_parts = []
+            
+            for part in parts:
+                if part == "<think>":
+                    inside_thinking = True
+                elif part == "</think>":
+                    inside_thinking = False
+                elif not inside_thinking:
+                    clean_parts.append(part)
+            
+            json_extraction_response = ''.join(clean_parts)
+        else:
+            # If tags match properly, we can use the regex approach
+            json_extraction_response = re.sub(r'<think>.*?</think>', '', json_extraction_response, flags=re.DOTALL)
+        
+        # Remove standalone think tags that might remain
         json_extraction_response = re.sub(r'</think>', '', json_extraction_response)
         json_extraction_response = re.sub(r'<think>', '', json_extraction_response)
         
@@ -2320,7 +2468,7 @@ ONLY return a valid parseable JSON array of steps, for example:
             steps = json.loads(json_str)
         else:
             # Try to extract from code blocks in the original response
-            code_blocks = re.findall(r"```(?:json)?\s*([\s\S]*?)\s*```", response)
+            code_blocks = re.findall(r"```(?:json)?\s*([\s\S]*?)\s*```", plan_response)
             if code_blocks:
                 json_str = code_blocks[0]
                 
@@ -2336,7 +2484,7 @@ ONLY return a valid parseable JSON array of steps, for example:
         if not retry_needed:
             print(f"{Fore.RED}Failed to parse the plan: {str(e)}{Style.RESET_ALL}")
             print(f"{Fore.YELLOW}Raw response:{Style.RESET_ALL}")
-            print(response)
+            print(plan_response)
         retry_needed = True
     
     # If we couldn't extract valid JSON, retry with the same prompt
@@ -2349,31 +2497,77 @@ ONLY return a valid parseable JSON array of steps, for example:
         # Print "Retrying plan generation..." to indicate processing
         print(f"{Fore.CYAN}Retrying plan generation...{Style.RESET_ALL}")
         
-        # Get the response from Ollama
-        response = get_ollama_response(conversation_history)
+        # Get the response from Ollama with even stricter parameters
+        try:
+            # Prepare the request payload with stricter options
+            payload = {
+                "model": model or CURRENT_MODEL,
+                "messages": conversation_history,
+                "stream": False,
+                "options": {
+                    "max_tokens": 2000,    # Same tight limit
+                    "temperature": 0.0,    # Zero temperature for maximum determinism
+                    "top_p": 0.05          # Even narrower token selection
+                }
+            }
+            
+            # Send a direct request to the Ollama API
+            response = requests.post(OLLAMA_API_URL, json=payload, timeout=timeout or DEFAULT_TIMEOUT)
+            
+            # Process the response
+            if response.status_code == 200:
+                response_json = response.json()
+                plan_response = response_json.get("message", {}).get("content", "")
+            else:
+                print(f"{Fore.RED}Error: Received status code {response.status_code} from Ollama API{Style.RESET_ALL}")
+                print(f"{Fore.RED}Response: {response.text}{Style.RESET_ALL}")
+                return
+        except Exception as e:
+            print(f"{Fore.RED}Error during retry plan generation: {str(e)}{Style.RESET_ALL}")
+            return
         
-        if not response:
+        if not plan_response:
             print(f"{Fore.RED}Failed to get a plan from the model on retry.{Style.RESET_ALL}")
             return
         
         # Process thinking blocks for display
-        processed_response = process_thinking_blocks(response)
+        processed_response = process_thinking_blocks(plan_response)
+        print(f"{Fore.GREEN}Revised Plan:{Style.RESET_ALL}")
         print(f"{Fore.GREEN}{processed_response}{Style.RESET_ALL}")
         
         # Add the assistant's retry response to the conversation history
-        conversation_history.append({"role": "assistant", "content": response})
+        conversation_history.append({"role": "assistant", "content": plan_response})
         
+        # Try to extract JSON from the retry response
         try:
-            # For the retry, use the same cleaning and parsing logic
-            import re
-            
             # Create a copy of the response for JSON extraction
-            # This way we preserve the original response with thinking blocks
-            json_extraction_response = response
+            json_extraction_response = plan_response
             
-            # Remove thinking blocks
-            json_extraction_response = re.sub(r'<think>.*?</think>', '', json_extraction_response, flags=re.DOTALL)
-            # Remove standalone think tags
+            # First, check for mismatched thinking tags which would cause problems
+            think_open_count = json_extraction_response.count("<think>")
+            think_close_count = json_extraction_response.count("</think>")
+            
+            # More robust thinking block removal
+            if think_open_count != think_close_count:
+                # If tags don't match, use our split-based approach which is more reliable
+                parts = re.split(r'(<think>|</think>)', json_extraction_response)
+                inside_thinking = False
+                clean_parts = []
+                
+                for part in parts:
+                    if part == "<think>":
+                        inside_thinking = True
+                    elif part == "</think>":
+                        inside_thinking = False
+                    elif not inside_thinking:
+                        clean_parts.append(part)
+                
+                json_extraction_response = ''.join(clean_parts)
+            else:
+                # If tags match properly, we can use the regex approach
+                json_extraction_response = re.sub(r'<think>.*?</think>', '', json_extraction_response, flags=re.DOTALL)
+            
+            # Remove standalone think tags that might remain
             json_extraction_response = re.sub(r'</think>', '', json_extraction_response)
             json_extraction_response = re.sub(r'<think>', '', json_extraction_response)
             
@@ -2381,7 +2575,7 @@ ONLY return a valid parseable JSON array of steps, for example:
             json_extraction_response = re.sub(r'```.*?```', '', json_extraction_response, flags=re.DOTALL)
             json_extraction_response = re.sub(r'Here is the JSON array:|Here are the steps:|Steps:', '', json_extraction_response)
             
-            # Find the first [ and last ] in the cleaned response
+            # Find JSON in the cleaned response
             json_start = json_extraction_response.find("[")
             json_end = json_extraction_response.rfind("]") + 1
             
@@ -2396,8 +2590,8 @@ ONLY return a valid parseable JSON array of steps, for example:
                 
                 steps = json.loads(json_str)
             else:
-                # Try to extract from code blocks
-                code_blocks = re.findall(r"```(?:json)?\s*([\s\S]*?)\s*```", response)
+                # Try to extract from code blocks in the original response
+                code_blocks = re.findall(r"```(?:json)?\s*([\s\S]*?)\s*```", plan_response)
                 if code_blocks:
                     json_str = code_blocks[0]
                     
@@ -2407,13 +2601,14 @@ ONLY return a valid parseable JSON array of steps, for example:
                     
                     steps = json.loads(json_str)
                 else:
-                    raise ValueError("No valid JSON found in the response even after retry")
+                    print(f"{Fore.RED}No valid JSON found in the retry response.{Style.RESET_ALL}")
+                    return
         except (json.JSONDecodeError, ValueError) as e:
             print(f"{Fore.RED}Failed to parse the plan after retry: {str(e)}{Style.RESET_ALL}")
             print(f"{Fore.YELLOW}Raw response from retry:{Style.RESET_ALL}")
-            print(response)
+            print(plan_response)
             return
-    
+
     if not steps:
         print(f"{Fore.RED}Could not extract a valid plan from the model's response.{Style.RESET_ALL}")
         return

@@ -114,7 +114,7 @@ def test_json_extraction_from_llm_response(mock_get_response, mock_plan_response
         conversation_history = []
         
         # Call the function with a test query
-        code_assistant.handle_plan_query("plan: Create a hello world app", conversation_history)
+        code_assistant.handle_plan_query("plan: Create a hello world app", conversation_history, model=None, timeout=None)
         
         # Since we return 'n' to the first prompt, the function should exit after parsing the JSON
         # We need to verify the JSON was correctly extracted
@@ -150,7 +150,7 @@ These steps should help you accomplish your goal.'''
     
     with patch('builtins.print'), patch('builtins.input', return_value='n'):
         conversation_history = []
-        code_assistant.handle_plan_query("plan: Test code blocks", conversation_history)
+        code_assistant.handle_plan_query("plan: Test code blocks", conversation_history, model=None, timeout=None)
         
         # Verify that the JSON was extracted from the code blocks
         assert len(conversation_history) == 2
@@ -177,7 +177,7 @@ def test_handle_plan_query_malformed_json(mock_get_response):
     
     with patch('builtins.print') as mock_print, patch('builtins.input', return_value='n'):
         conversation_history = []
-        code_assistant.handle_plan_query("plan: Test malformed JSON", conversation_history)
+        code_assistant.handle_plan_query("plan: Test malformed JSON", conversation_history, model=None, timeout=None)
         
         # Verify some error message was printed - check just for the general failure pattern
         # rather than specific line numbers which might change
@@ -206,7 +206,7 @@ def test_execute_plan_steps(mock_get_response, mock_plan_response, mock_subproce
             conversation_history = []
             
             # Call the function with a test query
-            code_assistant.handle_plan_query("plan: Create a hello world app", conversation_history)
+            code_assistant.handle_plan_query("plan: Create a hello world app", conversation_history, model=None, timeout=None)
             
             # Verify that files were created and commands were run
             assert os.path.exists("hello.py")
@@ -248,7 +248,7 @@ def test_execute_specific_step_types(mock_get_response, mock_subprocess_run, moc
         
         with patch('builtins.print'):
             conversation_history = []
-            code_assistant.handle_plan_query("plan: Test all step types", conversation_history)
+            code_assistant.handle_plan_query("plan: Test all step types", conversation_history, model=None, timeout=None)
             
             # Verify files were created
             assert os.path.exists("test_create.py")
@@ -289,7 +289,7 @@ def test_user_skipping_steps(mock_get_response, mock_plan_response, mock_subproc
             ]
             
             conversation_history = []
-            code_assistant.handle_plan_query("plan: Test skipping steps", conversation_history)
+            code_assistant.handle_plan_query("plan: Test skipping steps", conversation_history, model=None, timeout=None)
             
             # Verify the empty file was created but we stopped before executing commands
             assert os.path.exists("hello.py")
@@ -321,7 +321,7 @@ def test_command_execution_error(mock_get_response, mock_subprocess_run, mock_in
     
     with patch('builtins.print') as mock_print:
         conversation_history = []
-        code_assistant.handle_plan_query("plan: Test command error", conversation_history)
+        code_assistant.handle_plan_query("plan: Test command error", conversation_history, model=None, timeout=None)
         
         # Verify error message was printed
         mock_print.assert_any_call(f"{code_assistant.Fore.RED}Command failed with error code 1:{code_assistant.Style.RESET_ALL}")
@@ -346,7 +346,7 @@ def test_json_retry_mechanism(mock_get_response, mock_inputs):
     
     with patch('builtins.print') as mock_print:
         conversation_history = []
-        code_assistant.handle_plan_query("plan: Test retry mechanism", conversation_history)
+        code_assistant.handle_plan_query("plan: Test retry mechanism", conversation_history, model=None, timeout=None)
         
         # Verify the retry message was printed
         mock_print.assert_any_call(f"{code_assistant.Fore.YELLOW}The model didn't return a valid JSON plan. Retrying...{code_assistant.Style.RESET_ALL}")
@@ -389,7 +389,7 @@ I'll create a plan for making a Hello World program.
     
     with patch('builtins.print') as mock_print:
         conversation_history = []
-        code_assistant.handle_plan_query("plan: Test thinking blocks and malformed JSON", conversation_history)
+        code_assistant.handle_plan_query("plan: Test thinking blocks and malformed JSON", conversation_history, model=None, timeout=None)
         
         # We should NOT see a retry message since our cleaning and repairing should handle this
         retry_message = f"{code_assistant.Fore.YELLOW}The model didn't return a valid JSON plan. Retrying...{code_assistant.Style.RESET_ALL}"
@@ -425,16 +425,16 @@ def test_vibecode_alias_in_main_flow(mock_handle_plan):
         # Create a function to simulate the main command flow
         def simulate_command_flow(query):
             if code_assistant.is_plan_query(query):
-                code_assistant.handle_plan_query(query, conversation_history)
+                code_assistant.handle_plan_query(query, conversation_history, model=None, timeout=None)
         
         # Test with 'plan' command
         simulate_command_flow(plan_query)
-        mock_handle_plan.assert_called_with(plan_query, conversation_history)
+        mock_handle_plan.assert_called_with(plan_query, conversation_history, model=None, timeout=None)
         mock_handle_plan.reset_mock()
         
         # Test with 'vibecode' command
         simulate_command_flow(vibecode_query)
-        mock_handle_plan.assert_called_with(vibecode_query, conversation_history)
+        mock_handle_plan.assert_called_with(vibecode_query, conversation_history, model=None, timeout=None)
         
         # Verify both commands were extracted correctly
         assert code_assistant.extract_plan_query(plan_query) == "Create a test app"

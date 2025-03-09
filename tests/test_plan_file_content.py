@@ -49,7 +49,7 @@ def test_file_content_inclusion_in_planning_prompt(mock_read_file, mock_get_resp
         
         # Execute the plan query
         conversation_history = []
-        code_assistant.handle_plan_query(plan_query, conversation_history)
+        code_assistant.handle_plan_query(plan_query, conversation_history, model=None, timeout=None)
         
         # Verify that the file content was included in the planning prompt
         planning_prompt = conversation_history[0]["content"]
@@ -93,7 +93,7 @@ def test_multiple_file_paths_in_query(mock_read_file, mock_get_response, temp_di
         
         # Execute the plan query
         conversation_history = []
-        code_assistant.handle_plan_query(plan_query, conversation_history)
+        code_assistant.handle_plan_query(plan_query, conversation_history, model=None, timeout=None)
         
         # Verify that both file contents were included in the planning prompt
         planning_prompt = conversation_history[0]["content"]
@@ -123,7 +123,7 @@ def test_edit_file_in_planning_prompt(mock_read_file, mock_get_response, temp_fi
         
         # Execute the plan query
         conversation_history = []
-        code_assistant.handle_plan_query(plan_query, conversation_history)
+        code_assistant.handle_plan_query(plan_query, conversation_history, model=None, timeout=None)
         
         # Verify that the file content was included in the planning prompt
         planning_prompt = conversation_history[0]["content"]
@@ -167,7 +167,7 @@ def test_edit_file_execution(mock_get_response, temp_file_with_content):
             # Execute the plan query
             conversation_history = []
             with patch('code_assistant.generate_colored_diff', return_value="Diff preview"):
-                code_assistant.handle_plan_query(plan_query, conversation_history)
+                code_assistant.handle_plan_query(plan_query, conversation_history, model=None, timeout=None)
             
             # Read the updated file content
             with open(os.path.basename(temp_file_with_content), 'r') as f:
@@ -193,7 +193,7 @@ def test_nonexistent_file_handling(mock_get_response):
         
         # Execute the plan query
         conversation_history = []
-        code_assistant.handle_plan_query(plan_query, conversation_history)
+        code_assistant.handle_plan_query(plan_query, conversation_history, model=None, timeout=None)
         
         # Verify that a warning was printed
         warning_calls = [call for call in mock_print.call_args_list if "Warning: Could not read file nonexistent.py" in str(call)]

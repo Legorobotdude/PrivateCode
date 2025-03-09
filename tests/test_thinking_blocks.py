@@ -179,6 +179,68 @@ class TestThinkingBlocks(unittest.TestCase):
         self.assertTrue("Before" in result)
         self.assertTrue("After" in result)
 
+    def test_remove_extremely_large_thinking(self):
+        """Test that extremely large thinking blocks are completely removed when thinking is disabled."""
+        # Setup
+        code_assistant.SHOW_THINKING = False
+        
+        # Create an extremely large thinking block (larger than chunk_size)
+        thinking_content = "X" * 50000  # 50,000 Xs (well beyond the chunk size)
+        before_content = "Content before thinking. " * 100  # Substantial content before
+        after_content = "Content after thinking. " * 100  # Substantial content after
+        
+        # Construct a response with the large thinking block
+        content = f"{before_content}<think>{thinking_content}</think>{after_content}"
+        
+        # Process the content
+        result = code_assistant.process_thinking_blocks(content)
+        
+        # Verify nothing from the thinking block remains
+        self.assertNotIn("<think>", result)
+        self.assertNotIn("</think>", result)
+        self.assertNotIn("XXXXX", result)  # No trace of the thinking content
+        
+        # Verify the content before and after is preserved exactly
+        self.assertEqual(result, before_content + after_content)
+        
+        # Verify the length is correct (should be original length minus thinking block and tags)
+        expected_length = len(before_content) + len(after_content)
+        self.assertEqual(len(result), expected_length)
+
+    def test_truncated_thinking_blocks(self):
+        """Test handling of truncated thinking blocks with missing closing tags."""
+        # Setup - thinking is disabled
+        code_assistant.SHOW_THINKING = False
+        
+        # Create content with a truncated thinking block (missing closing tag)
+        truncated_content = "Normal content before <think>This thinking block has no closing tag"
+        
+        # Process the content
+        result = code_assistant._sanitize_response_content(truncated_content)
+        
+        # The sanitize function should remove the truncated thinking block entirely
+        self.assertEqual(result, "Normal content before ")
+        self.assertNotIn("<think>", result)
+        
+        # Now test the processing of the sanitized content
+        processed = code_assistant.process_thinking_blocks(result)
+        
+        # The processed result should be the same as the sanitized result
+        self.assertEqual(processed, "Normal content before ")
+        
+        # Setup - thinking is enabled
+        code_assistant.SHOW_THINKING = True
+        
+        # Create content with multiple thinking blocks, including a truncated one
+        complex_content = "Start <think>Complete thinking</think> middle <think>Truncated thinking"
+        
+        # Process the content
+        result = code_assistant._sanitize_response_content(complex_content)
+        
+        # Should keep the complete thinking block but remove the truncated one
+        self.assertEqual(result, "Start <think>Complete thinking</think> middle ")
+        self.assertTrue("<think>Complete thinking</think>" in result)
+
     def test_large_response_with_thinking_blocks(self):
         """Test processing an extremely large response with multiple thinking blocks."""
         # Create a very large response with a single massive thinking block
