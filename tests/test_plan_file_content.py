@@ -30,7 +30,8 @@ def temp_file_with_content(temp_directory):
 
 @patch('code_assistant.get_ollama_response')
 @patch('code_assistant.read_file_content')
-def test_file_content_inclusion_in_planning_prompt(mock_read_file, mock_get_response, temp_file_with_content):
+@patch('requests.post')
+def test_file_content_inclusion_in_planning_prompt(mock_requests_post, mock_read_file, mock_get_response, temp_file_with_content):
     """Test that file contents are correctly included in the planning prompt."""
     # Setup mock for read_file_content to return test content
     mock_read_file.return_value = "def hello():\n    print('Hello, World!')\n\nif __name__ == '__main__':\n    hello()"
@@ -39,6 +40,18 @@ def test_file_content_inclusion_in_planning_prompt(mock_read_file, mock_get_resp
     mock_get_response.return_value = """[
         {"type": "edit_file", "file_path": "test_file.py", "original_pattern": "def hello():", "new_content": "def hello_world():"}
     ]"""
+    
+    # Mock the direct API request response
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "message": {
+            "content": """[
+                {"type": "edit_file", "file_path": "test_file.py", "original_pattern": "def hello():", "new_content": "def hello_world():"}
+            ]"""
+        }
+    }
+    mock_requests_post.return_value = mock_response
     
     with patch('builtins.print'), patch('builtins.input', return_value='n'):
         # Get the file name without the path
@@ -60,7 +73,8 @@ def test_file_content_inclusion_in_planning_prompt(mock_read_file, mock_get_resp
 
 @patch('code_assistant.get_ollama_response')
 @patch('code_assistant.read_file_content')
-def test_multiple_file_paths_in_query(mock_read_file, mock_get_response, temp_directory):
+@patch('requests.post')
+def test_multiple_file_paths_in_query(mock_requests_post, mock_read_file, mock_get_response, temp_directory):
     """Test that multiple file paths in the query are correctly processed."""
     # Setup mock for read_file_content to return different content based on file path
     def mock_read_file_side_effect(file_path, *args, **kwargs):
@@ -72,6 +86,23 @@ def test_multiple_file_paths_in_query(mock_read_file, mock_get_response, temp_di
     
     mock_read_file.side_effect = mock_read_file_side_effect
     
+    # Setup a test response from the LLM
+    mock_get_response.return_value = """[
+        {"type": "edit_file", "file_path": "file1.py", "original_pattern": "print('File 1')", "new_content": "print('Updated File 1')"}
+    ]"""
+    
+    # Mock the direct API request response
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "message": {
+            "content": """[
+                {"type": "edit_file", "file_path": "file1.py", "original_pattern": "print('File 1')", "new_content": "print('Updated File 1')"}
+            ]"""
+        }
+    }
+    mock_requests_post.return_value = mock_response
+    
     # Create two test files
     file1_path = os.path.join(temp_directory, "file1.py")
     file2_path = os.path.join(temp_directory, "file2.py")
@@ -81,11 +112,6 @@ def test_multiple_file_paths_in_query(mock_read_file, mock_get_response, temp_di
     
     with open(file2_path, "w") as f:
         f.write("# File 2 content\nprint('File 2')")
-    
-    # Setup a test response from the LLM
-    mock_get_response.return_value = """[
-        {"type": "edit_file", "file_path": "file1.py", "original_pattern": "print('File 1')", "new_content": "print('Updated File 1')"}
-    ]"""
     
     with patch('builtins.print'), patch('builtins.input', return_value='n'):
         # Create a plan query that references both files
@@ -104,7 +130,8 @@ def test_multiple_file_paths_in_query(mock_read_file, mock_get_response, temp_di
 
 @patch('code_assistant.get_ollama_response')
 @patch('code_assistant.read_file_content')
-def test_edit_file_in_planning_prompt(mock_read_file, mock_get_response, temp_file_with_content):
+@patch('requests.post')
+def test_edit_file_in_planning_prompt(mock_requests_post, mock_read_file, mock_get_response, temp_file_with_content):
     """Test that the edit_file step type works correctly in the planning functionality."""
     # Setup mock for read_file_content to return test content
     mock_read_file.return_value = "def hello():\n    print('Hello, World!')\n\nif __name__ == '__main__':\n    hello()"
@@ -113,6 +140,18 @@ def test_edit_file_in_planning_prompt(mock_read_file, mock_get_response, temp_fi
     mock_get_response.return_value = """[
         {"type": "edit_file", "file_path": "test_file.py", "original_pattern": "def hello():", "new_content": "def hello_world():"}
     ]"""
+    
+    # Mock the direct API request response
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "message": {
+            "content": """[
+                {"type": "edit_file", "file_path": "test_file.py", "original_pattern": "def hello():", "new_content": "def hello_world():"}
+            ]"""
+        }
+    }
+    mock_requests_post.return_value = mock_response
     
     with patch('builtins.print'), patch('builtins.input', return_value='n'):
         # Get the file name without the path
@@ -138,7 +177,8 @@ def test_edit_file_in_planning_prompt(mock_read_file, mock_get_response, temp_fi
         assert "new_content" in generated_plan
 
 @patch('code_assistant.get_ollama_response')
-def test_edit_file_execution(mock_get_response, temp_file_with_content):
+@patch('requests.post')
+def test_edit_file_execution(mock_requests_post, mock_get_response, temp_file_with_content):
     """Test that the edit_file step type correctly executes and modifies a file."""
     # Read the original file content
     with open(temp_file_with_content, 'r') as f:
@@ -148,6 +188,18 @@ def test_edit_file_execution(mock_get_response, temp_file_with_content):
     mock_get_response.return_value = """[
         {"type": "edit_file", "file_path": "%s", "original_pattern": "def hello():", "new_content": "def hello_world():"}
     ]""" % os.path.basename(temp_file_with_content)
+    
+    # Mock the direct API request response
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "message": {
+            "content": """[
+                {"type": "edit_file", "file_path": "%s", "original_pattern": "def hello():", "new_content": "def hello_world():"}
+            ]""" % os.path.basename(temp_file_with_content)
+        }
+    }
+    mock_requests_post.return_value = mock_response
     
     # Mock the input function to simulate user confirming the edit
     # We need to provide enough input values:
@@ -180,12 +232,25 @@ def test_edit_file_execution(mock_get_response, temp_file_with_content):
             os.chdir(original_dir)
 
 @patch('code_assistant.get_ollama_response')
-def test_nonexistent_file_handling(mock_get_response):
+@patch('requests.post')
+def test_nonexistent_file_handling(mock_requests_post, mock_get_response):
     """Test that nonexistent files are gracefully handled."""
     # Setup a test response from the LLM
     mock_get_response.return_value = """[
         {"type": "create_file", "file_path": "nonexistent.py"}
     ]"""
+    
+    # Mock the direct API request response
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "message": {
+            "content": """[
+                {"type": "create_file", "file_path": "nonexistent.py"}
+            ]"""
+        }
+    }
+    mock_requests_post.return_value = mock_response
     
     with patch('builtins.print') as mock_print, patch('builtins.input', return_value='n'):
         # Create a plan query that references a nonexistent file
@@ -200,4 +265,11 @@ def test_nonexistent_file_handling(mock_get_response):
         assert len(warning_calls) > 0, "No warning was printed for nonexistent file"
         
         # Verify that the plan was still generated despite the missing file
-        assert len(conversation_history) == 2  # Prompt and response 
+        assert len(conversation_history) == 4  # Analysis prompt, analysis response, planning prompt, planning response
+        
+        # Check that the first message is the analysis prompt
+        assert "analyze" in conversation_history[0]["content"].lower()
+        
+        # Check that the last message is the planning response
+        assert "create_file" in conversation_history[3]["content"]
+        assert "nonexistent.py" in conversation_history[3]["content"] 
