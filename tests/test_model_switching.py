@@ -134,7 +134,7 @@ class TestModelSwitching:
         try:
             # Set up test
             conversation_history = []
-            user_input = "model:"
+            user_input = "model: list"  # Use "list" explicitly as it's the special case in the code
             
             # Mock the API response for available models
             mock_response = MagicMock()
