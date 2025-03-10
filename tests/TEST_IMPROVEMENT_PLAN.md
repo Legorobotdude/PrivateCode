@@ -1,84 +1,80 @@
 # Test Coverage Improvement Plan
 
 ## Current Status
-- Current code coverage: 62%
-- Many critical components have good test coverage
-- Key areas like file encoding, file I/O, and content extraction now have improved test coverage
+- Current code coverage: 65% (improved from 60%)
+- Made significant improvements in file operations, command execution, and planning functionality
+- Added 55+ new test cases across the codebase
 
-## Areas Needing Better Coverage
+## Completed Improvements
+- **Command Execution**: Added tests for safety mechanisms, command parsing, and special handlers
+- **File Operations**: Added tests for encoding detection, line range reading, and error handling
+- **Planning Functionality**: Added tests for plan generation, JSON extraction, and step execution
 
-### 1. Command Execution (High Priority)
-- The command execution functions in `code_assistant.py` need more robust testing
-- Test both standard command execution and error handling
-- Create tests for both safe and potentially unsafe commands
-- Test working directory handling
+## Areas Needing Further Coverage
 
-### 2. Web Search Functionality (Medium Priority)
+### 1. Web Search Functionality (High Priority)
 - Tests for web search content extraction
 - Mock the external API calls
 - Test error handling and timeout scenarios
+- Test search result processing and formatting
 
-### 3. File Operation Error Cases (Medium Priority)
-- More test cases for file operations under error conditions
-- Permission errors, disk full errors
-- Test binary file handling
-- Test large file handling
+### 2. File Operation Edge Cases (Medium Priority)
+- Test permission errors and access control
+- Test behavior with extremely large files
+- Test handling of binary files and unusual encodings
+- Test disk full scenarios and other I/O errors
 
-### 4. Planning Functionality (High Priority)
-- Test plan generation functions
-- Test prompt formatting 
-- Test the handling of various types of planning requests
+### 3. Model Switching (Medium Priority)
+- Test model selection logic
+- Test handling of unavailable models
+- Test performance with different models
+- Test model-specific parameter handling
 
-### 5. Interactive CLI Features (Low Priority)
+### 4. Interactive CLI Features (Low Priority)
 - Test the interactive features of the CLI
-- Test user input handling
-- Test the display of results
+- Test user input handling and validation
+- Test display formatting and color handling
+- Test terminal size adaptations
 
 ## Testing Strategy
 
 ### Improved Mocking
-- Create more comprehensive mock fixtures for external dependencies like Ollama API
-- Create mock file system fixtures for testing file operations without real files
-- Mock HTTP responses for web search functions
+- Create reusable mock fixtures for external dependencies
+- Use filesystem virtualization where appropriate
+- Mock HTTP responses with realistic test data
 
 ### Test Organization
-- Organize tests by functionality rather than by source file
-- Group related tests together for better maintainability
+- Continue organizing tests by functionality
 - Use parameterized tests to cover multiple scenarios efficiently
+- Employ property-based testing for complex inputs
 
 ### Edge Cases
 - Test handling of very large inputs
 - Test Unicode and special character handling
 - Test resource exhaustion scenarios
+- Test concurrency and timeout handling
 
 ## Implementation Plan
 
-### Phase 1: Critical Functionality (Immediate)
-- Focus on improving test coverage for:
-  - Command execution
-  - Planning functionality
-  - File operations error handling
+### Phase 1: Web Search Testing (Next)
+- Create `tests/test_web_search_extended.py`
+- Mock external search API responses
+- Test search query parsing and extraction
+- Test result processing and integration
 
-### Phase 2: Extended Functionality (Next)
-- Add tests for:
-  - Web search
-  - Complex file operations
-  - Model switching
+### Phase 2: Edge Cases and Error Handling
+- Focus on less common but critical error paths
+- Test resource limitations (memory, disk space)
+- Test exceptional inputs and boundary conditions
 
-### Phase 3: Edge Cases and Full Coverage (Future)
-- Focus on achieving 90%+ coverage
-- Test all edge cases
-- Test interactive features
+### Phase 3: Full Coverage and Optimization
+- Work toward 80%+ coverage target
+- Focus on previously untested code paths
+- Refine test suite for speed and maintainability
 
-## Recommended Test Files to Create
+## Monitoring and Maintenance
 
-1. `tests/test_command_execution_extended.py`: Comprehensive tests for command execution
-2. `tests/test_web_search_extended.py`: Tests for web search functionality
-3. `tests/test_file_operations_errors.py`: Tests for error handling in file operations
-4. `tests/test_planning_functionality_extended.py`: More tests for planning functionality
-
-## Maintenance Notes
-
-- As new features are added, corresponding tests should be created immediately
-- Whenever a bug is fixed, a regression test should be added
-- Regular coverage reports should be generated to identify gaps 
+- Run coverage reports after significant code changes
+- Add regression tests for any bugs discovered
+- Continuously refine tests as the codebase evolves
+- Prioritize testing for frequently changing components 
