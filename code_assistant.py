@@ -2400,10 +2400,9 @@ IMPORTANT: Keep your response EXTREMELY CONCISE. ONLY return a valid JSON array 
         print(f"{Fore.RED}Failed to get a plan from the model.{Style.RESET_ALL}")
         return
     
-    # Process thinking blocks for display
+    # Process thinking blocks for display but don't print raw response yet
     processed_response = process_thinking_blocks(plan_response)
-    print(f"{Fore.GREEN}Plan:{Style.RESET_ALL}")
-    print(f"{Fore.GREEN}{processed_response}{Style.RESET_ALL}")
+    # We'll only show the formatted plan, not the raw JSON
     
     # Add the assistant's response to the conversation history
     conversation_history.append({"role": "assistant", "content": plan_response})
@@ -2530,10 +2529,9 @@ IMPORTANT: Keep your response EXTREMELY CONCISE. ONLY return a valid JSON array 
             print(f"{Fore.RED}Failed to get a plan from the model on retry.{Style.RESET_ALL}")
             return
         
-        # Process thinking blocks for display
+        # Process thinking blocks for display but don't print raw response yet
         processed_response = process_thinking_blocks(plan_response)
-        print(f"{Fore.GREEN}Revised Plan:{Style.RESET_ALL}")
-        print(f"{Fore.GREEN}{processed_response}{Style.RESET_ALL}")
+        # We'll only show the formatted plan, not the raw JSON
         
         # Add the assistant's retry response to the conversation history
         conversation_history.append({"role": "assistant", "content": plan_response})
