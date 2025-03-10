@@ -25,18 +25,47 @@ class TestOllamaAPI:
         }
         mock_get.return_value = mock_response
         
-        result = code_assistant.check_ollama_connection()
-        assert result is True, "Connection check should succeed with valid response"
+        with patch('builtins.print') as mock_print:
+            result = code_assistant.check_ollama_connection()
+            assert result is True, "Connection check should succeed with valid response"
+            assert any("Ollama connection successful" in str(args) for args, _ in mock_print.call_args_list), "Should print success message"
         
-        # Mock a failed connection
+        # Test different HTTP error responses
+        # Case 1: 404 Not Found
+        mock_response = MagicMock()
+        mock_response.status_code = 404
+        mock_response.reason = "Not Found"
+        mock_response.text = "API endpoint not found"
+        mock_response.raise_for_status.side_effect = requests.exceptions.HTTPError(
+            "404 Not Found", response=mock_response)
+        mock_get.return_value = mock_response
+        
+        with patch('builtins.print') as mock_print:
+            result = code_assistant.check_ollama_connection()
+            assert result is False, "Connection check should fail with 404 response"
+            assert any("HTTP 404 Not Found" in str(args) for args, _ in mock_print.call_args_list), "Should print 404 error message"
+            assert any("API endpoint not found" in str(args) for args, _ in mock_print.call_args_list), "Should print error details"
+        
+        # Case 2: 500 Internal Server Error
         mock_response.status_code = 500
-        result = code_assistant.check_ollama_connection()
-        assert result is False, "Connection check should fail with invalid response"
+        mock_response.reason = "Internal Server Error"
+        mock_response.text = "Server error"
+        mock_response.raise_for_status.side_effect = requests.exceptions.HTTPError(
+            "500 Internal Server Error", response=mock_response)
         
-        # Mock a connection error
-        mock_get.side_effect = requests.exceptions.RequestException("Connection error")
-        result = code_assistant.check_ollama_connection()
-        assert result is False, "Connection check should fail on exception"
+        with patch('builtins.print') as mock_print:
+            result = code_assistant.check_ollama_connection()
+            assert result is False, "Connection check should fail with 500 response"
+            assert any("HTTP 500 Internal Server Error" in str(args) for args, _ in mock_print.call_args_list), "Should print 500 error message"
+            assert any("Try restarting the Ollama server" in str(args) for args, _ in mock_print.call_args_list), "Should suggest restarting the server"
+        
+        # Test connection error
+        mock_get.side_effect = requests.exceptions.ConnectionError("Connection refused")
+        
+        with patch('builtins.print') as mock_print:
+            result = code_assistant.check_ollama_connection()
+            assert result is False, "Connection check should fail on connection error"
+            assert any("Cannot connect to Ollama" in str(args) for args, _ in mock_print.call_args_list), "Should print connection error message"
     
     @patch('requests.post')
     def test_get_ollama_response(self, mock_post):
@@ -77,7 +106,7 @@ class TestOllamaAPI:
         # The implementation might handle errors gracefully instead of raising exceptions
         response = code_assistant.get_ollama_response(history, model="codellama")
         assert "Error" in response, "Response should contain error message for API errors"
-        assert "internal error" in response.lower(), "Response should indicate server error type"
+        assert "internal server error" in response.lower(), "Response should indicate server error type"
         
         # Reset the mock for the next test
         mock_post.reset_mock()
@@ -87,9 +116,7 @@ class TestOllamaAPI:
         mock_post.side_effect = requests.exceptions.RequestException("Connection error")
         response = code_assistant.get_ollama_response(history, model="codellama")
         # Check for the actual message format
-        assert "Request failed" in response, "Response should indicate request failure"
-        assert "RequestException" in response, "Response should indicate request exception type"
-        assert "Connection error" in response, "Response should indicate the connection error"
+        assert "Connection error" in response, "Response should indicate connection error"
     
     @patch('requests.post')
     def test_get_ollama_response_timeout(self, mock_post):
@@ -119,12 +146,16 @@ class TestOllamaAPI:
         assert "Connection error" in response, "Response should indicate connection error"
         with patch('builtins.print') as mock_print:
             code_assistant.get_ollama_response(history, model="codellama")
-            suggestion_printed = any("still running" in str(args) for args, _ in mock_print.call_args_list)
+            suggestion_printed = any("Please check if Ollama is still running" in str(args) for args, _ in mock_print.call_args_list)
             assert suggestion_printed, "Should print a suggestion to check if Ollama is still running"
     
     @patch('requests.post')
-    def test_get_ollama_response_http_errors(self, mock_post):
+    @patch('code_assistant.get_available_models')
+    def test_get_ollama_response_http_errors(self, mock_get_models, mock_post):
         """Test that the get_ollama_response function handles different HTTP errors properly."""
+        # Mock get_available_models to return an empty list to prevent fallback behavior
+        mock_get_models.return_value = []
+        
         history = [
             {"role": "user", "content": "Hello, can you help me with some code?"}
         ]
@@ -140,7 +171,7 @@ class TestOllamaAPI:
         
         response = code_assistant.get_ollama_response(history, model="nonexistent_model")
         assert "Model 'nonexistent_model' not found" in response, "Response should indicate model not found"
-        assert "pull the model" in response, "Response should suggest pulling the model"
+        assert "Pull the model" in response, "Response should suggest pulling the model"
         
         # Test 400 Bad Request
         mock_response.status_code = 400
@@ -150,7 +181,7 @@ class TestOllamaAPI:
             "400 Bad Request", response=mock_response)
         
         response = code_assistant.get_ollama_response(history, model="codellama")
-        assert "Bad request" in response, "Response should indicate bad request"
+        assert "Error 400 Bad Request" in response, "Response should indicate bad request"
         
         # Test 500 Internal Server Error
         mock_response.status_code = 500
@@ -160,7 +191,7 @@ class TestOllamaAPI:
             "500 Internal Server Error", response=mock_response)
         
         response = code_assistant.get_ollama_response(history, model="codellama")
-        assert "internal error" in response.lower(), "Response should indicate server error"
+        assert "Internal server error" in response, "Response should indicate server error"
         
         with patch('builtins.print') as mock_print:
             code_assistant.get_ollama_response(history, model="codellama")

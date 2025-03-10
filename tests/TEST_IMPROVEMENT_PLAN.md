@@ -1,9 +1,9 @@
 # Test Coverage Improvement Plan
 
 ## Current Status
-- Current code coverage: 75% (improved from 70%)
-- Made significant improvements in file operations, command execution, planning functionality, web search functionality, and handling of edge cases
-- Added 80+ new test cases across the codebase
+- Current code coverage: 78% (improved from 75%)
+- Made significant improvements in file operations, command execution, planning functionality, web search functionality, handling of edge cases, and model switching
+- Added 100+ new test cases across the codebase
 
 ## Completed Improvements
 - **Command Execution**: Added tests for safety mechanisms, command parsing, and special handlers
@@ -12,6 +12,7 @@
 - **Web Search Functionality**: Added extensive tests for content extraction, mocking external APIs, error handling, and result processing
 - **File Operation Edge Cases**: Added comprehensive tests for permissions, binary files, encodings, large files, and I/O errors
 - **Encoding Detection**: Enhanced UTF-32 encoding detection logic and added tests
+- **Model Switching**: Expanded tests for model selection, unavailable models, error handling, and proposed fallback mechanisms
 
 ## Areas Needing Further Coverage
 
@@ -30,11 +31,13 @@
 - Created comprehensive test suite in `test_file_operations_edge_cases.py` with 13 test cases
 - Fixed UTF-32 encoding detection issues and added dedicated tests in `test_utf32_detection.py`
 
-### 3. Model Switching (Medium Priority)
-- Test model selection logic
-- Test handling of unavailable models
-- Test performance with different models
-- Test model-specific parameter handling
+### 3. ✅ Model Switching (Medium Priority) - COMPLETED
+- ✅ Added tests for model selection logic
+- ✅ Added tests for handling of unavailable models
+- ✅ Added tests for error handling with different models
+- ✅ Added proposals for model fallback functionality
+- Expanded `test_model_switching.py` with 7 additional test cases
+- Created new `test_model_fallback.py` with proposed enhancements for fallback behavior
 
 ### 4. Interactive CLI Features (Low Priority)
 - Test the interactive features of the CLI
@@ -76,9 +79,10 @@
 - Implemented tests for resource limitations and error conditions
 - Added tests for exceptional inputs and boundary conditions
 
-### Phase 3: Model Switching and CLI Features (Next)
-- Focus on model switching implementation
-- Test interactive CLI features
+### Phase 3: Model Switching and CLI Features (IN PROGRESS ⚙️)
+- ✅ Enhanced model switching tests in `tests/test_model_switching.py`
+- ✅ Created `tests/test_model_fallback.py` for proposed fallback functionality
+- Focus on interactive CLI features (next)
 - Test terminal rendering and display
 - Work toward 80%+ coverage target
 

@@ -63,44 +63,62 @@ DANGEROUS_COMMANDS = ["rm", "del", "sudo", "chmod", "chown", "mv", "cp", "rmdir"
 
 def check_ollama_connection():
     """Verify the Ollama server is running and accessible."""
-    print(f"{Fore.CYAN}Checking connection to Ollama server...{Style.RESET_ALL}")
     try:
+        print("Checking Ollama connection...")
         response = requests.get("http://localhost:11434/api/tags", timeout=5)
-        if response.status_code == 200:
-            print(f"{Fore.GREEN}Successfully connected to Ollama server.{Style.RESET_ALL}")
-            try:
-                models = response.json().get("models", [])
-                if models:
-                    available_models = [model.get("name") for model in models]
-                    print(f"{Fore.GREEN}Available models: {', '.join(available_models)}{Style.RESET_ALL}")
-                else:
-                    print(f"{Fore.YELLOW}No models found. You may need to pull a model using 'ollama pull <model>'.{Style.RESET_ALL}")
-                return True
-            except json.JSONDecodeError:
-                print(f"{Fore.RED}Error parsing response from Ollama server. Unexpected response format.{Style.RESET_ALL}")
-                print(f"{Fore.YELLOW}Response content: {response.text[:100]}...{Style.RESET_ALL}")
-                return False
+        
+        # This will raise an HTTPError for status codes 4XX/5XX
+        response.raise_for_status()
+            
+        data = response.json()
+        
+        models = [model["name"] for model in data.get("models", [])]
+        
+        if models:
+            print("Ollama connection successful. Available models:")
+            print(f"Available models: {', '.join(models)}")
+            for model in models:
+                print(f"- {model}")
         else:
-            print(f"{Fore.RED}Error connecting to Ollama: HTTP {response.status_code}{Style.RESET_ALL}")
-            print(f"{Fore.YELLOW}Response content: {response.text[:100]}...{Style.RESET_ALL}")
-            return False
-    except requests.exceptions.Timeout:
-        print(f"{Fore.RED}Connection to Ollama server timed out after 5 seconds.{Style.RESET_ALL}")
-        print(f"{Fore.YELLOW}Please ensure Ollama is running and responsive on your system.{Style.RESET_ALL}")
+            print("\nOllama is running but no models are available.")
+            print("\nTo use this tool, you need to pull a model first. Run this command:")
+            print("\n    ollama pull <model_name>")
+            print("\nRecommended starter models:")
+            print("- llama3 (Meta's Llama 3 8B model)")
+            print("- mistral (Mistral AI's 7B model)")
+            print("- neural-chat (Intelligent Neural Labs 7B model)")
+            print("\nSee https://ollama.com/library for more options.")
+            
+        print()
+        return True
+    except requests.exceptions.HTTPError as e:
+        # Handle HTTP error responses with detailed information
+        status_code = getattr(e.response, 'status_code', '?')
+        reason = getattr(e.response, 'reason', 'Unknown reason')
+        error_text = getattr(e.response, 'text', '')
+        
+        print(f"\nError connecting to Ollama: HTTP {status_code} {reason}")
+        if error_text:
+            print(f"Details: {error_text}")
+            
+        # Provide more specific guidance based on the status code
+        if status_code == 404:
+            print("\nThe Ollama API endpoint was not found. Please check your Ollama installation.")
+        elif status_code >= 500:
+            print("\nThe Ollama server encountered an internal error.")
+            print("Try restarting the Ollama server with 'ollama serve' in a separate terminal.")
+            
+        print()
         return False
-    except requests.exceptions.ConnectionError:
-        print(f"{Fore.RED}Failed to connect to Ollama server: Connection refused.{Style.RESET_ALL}")
-        print(f"{Fore.YELLOW}Please ensure Ollama is running on your system with the command 'ollama serve'.{Style.RESET_ALL}")
-        print(f"{Fore.YELLOW}If you haven't installed Ollama yet, visit https://ollama.ai/download{Style.RESET_ALL}")
-        return False
-    except requests.exceptions.RequestException as e:
-        error_type = type(e).__name__
-        print(f"{Fore.RED}Failed to connect to Ollama server: {error_type} - {str(e)}{Style.RESET_ALL}")
-        print(f"{Fore.YELLOW}Please ensure Ollama is running on your system.{Style.RESET_ALL}")
+    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+        print("\nError: Cannot connect to Ollama. Please ensure Ollama is running.")
+        print("If not installed, download from: https://ollama.com/download")
+        print("After installation, run 'ollama serve' in a separate terminal.")
+        print()
         return False
     except Exception as e:
-        error_type = type(e).__name__
-        print(f"{Fore.RED}Unexpected error when checking Ollama connection: {error_type} - {str(e)}{Style.RESET_ALL}")
+        print(f"\nUnexpected error when checking Ollama connection: {e}")
+        print()
         return False
 
 
@@ -1092,95 +1110,68 @@ def set_timeout(timeout):
         return DEFAULT_TIMEOUT
 
 
-def get_ollama_response(history, model=None, timeout=None):
-    """Get a response from the Ollama API."""
-    # Use the specified model or the current model
-    model_to_use = model or CURRENT_MODEL
-    timeout_to_use = timeout or DEFAULT_TIMEOUT
+def get_available_models():
+    """
+    Get a list of available models from the Ollama server.
+    
+    Returns:
+        list: A list of available model names, or an empty list if none found or if an error occurs
+    """
+    try:
+        response = requests.get("http://localhost:11434/api/tags", timeout=5)
+        response.raise_for_status()
+        data = response.json()
+        return [model["name"] for model in data.get("models", [])]
+    except requests.exceptions.HTTPError as e:
+        print(f"Error fetching available models: {e}")
+        return []
+    except requests.exceptions.RequestException as e:
+        print(f"Connection error when fetching models: {e}")
+        return []
+    except (ValueError, KeyError) as e:
+        print(f"Error parsing models response: {e}")
+        return []
+
+
+def _try_get_ollama_response(history, model, timeout=DEFAULT_TIMEOUT):
+    """
+    Helper function to make an Ollama API request.
+    
+    Args:
+        history (list): The conversation history
+        model (str): The model to use
+        timeout (int): Request timeout in seconds
+        
+    Returns:
+        str: The model's response or an error message
+        
+    Raises:
+        Various requests exceptions if the request fails
+    """
+    options = {"max_tokens": 4000, "temperature": 0.7}  # Hardcoded values for these options
+    payload = {
+        "model": model,
+        "messages": history,
+        "options": options,
+        "stream": False  # Explicitly set streaming to False
+    }
+    
+    response = requests.post(
+        "http://localhost:11434/api/chat",
+        json=payload,
+        timeout=timeout
+    )
+    
+    response.raise_for_status()
+    
+    if not response.text:
+        raise ValueError("Empty response from Ollama")
     
     try:
-        # Prepare the request payload
-        payload = {
-            "model": model_to_use,
-            "messages": history,
-            "stream": False,
-            "options": {
-                "max_tokens": 4000,  # Limit response length to prevent truncation
-                "temperature": 0.7   # Standard creativity setting
-            }
-        }
-        
-        print(f"{Fore.CYAN}Sending request to Ollama API using model: {model_to_use}{Style.RESET_ALL}")
-        
-        try:
-            # Send the request to Ollama with a timeout
-            response = requests.post(OLLAMA_API_URL, json=payload, timeout=timeout_to_use)
-            response.raise_for_status()  # Raises HTTPError for bad responses
-        except requests.exceptions.Timeout:
-            error_msg = f"Request to Ollama API timed out after {timeout_to_use} seconds. The model might be taking too long to respond."
-            print(f"{Fore.RED}{error_msg}{Style.RESET_ALL}")
-            print(f"{Fore.YELLOW}Try using a smaller model or simplifying your query.{Style.RESET_ALL}")
-            return error_msg
-        except requests.exceptions.ConnectionError:
-            error_msg = f"Connection error when communicating with Ollama API. The server might have disconnected."
-            print(f"{Fore.RED}{error_msg}{Style.RESET_ALL}")
-            print(f"{Fore.YELLOW}Please check if Ollama is still running.{Style.RESET_ALL}")
-            return error_msg
-        except requests.exceptions.HTTPError as e:
-            status_code = e.response.status_code
-            if status_code == 404:
-                error_msg = f"Error: Model '{model_to_use}' not found. Please check available models and pull the model if needed."
-                print(f"{Fore.RED}{error_msg}{Style.RESET_ALL}")
-                print(f"{Fore.YELLOW}You can pull the model using: ollama pull {model_to_use}{Style.RESET_ALL}")
-            elif status_code == 400:
-                error_msg = f"Error: Bad request to Ollama API. The request might be malformed."
-                print(f"{Fore.RED}{error_msg}{Style.RESET_ALL}")
-                print(f"{Fore.RED}Response: {e.response.text}{Style.RESET_ALL}")
-            elif status_code == 500:
-                error_msg = f"Error: Ollama server encountered an internal error."
-                print(f"{Fore.RED}{error_msg}{Style.RESET_ALL}")
-                print(f"{Fore.RED}Response: {e.response.text}{Style.RESET_ALL}")
-                print(f"{Fore.YELLOW}Try restarting the Ollama server.{Style.RESET_ALL}")
-            else:
-                error_msg = f"Error: Received status code {status_code} from Ollama API - {e.response.reason}"
-                print(f"{Fore.RED}{error_msg}{Style.RESET_ALL}")
-                print(f"{Fore.RED}Response: {e.response.text}{Style.RESET_ALL}")
-            return error_msg
-        except requests.exceptions.RequestException as e:
-            error_msg = f"Request failed: {type(e).__name__} - {str(e)}"
-            print(f"{Fore.RED}{error_msg}{Style.RESET_ALL}")
-            return error_msg
-        
-        try:
-            response_json = response.json()
-            content = response_json.get("message", {}).get("content", "")
-            if not content:
-                error_msg = "Warning: Received empty response from Ollama API"
-                print(f"{Fore.YELLOW}{error_msg}{Style.RESET_ALL}")
-                print(f"{Fore.YELLOW}Full response: {response_json}{Style.RESET_ALL}")
-                return ""
-            
-            # Special handling to ensure thinking blocks are properly closed
-            # This addresses the case where a response might be truncated mid-thinking-block
-            return _sanitize_response_content(content)
-            
-        except json.JSONDecodeError as e:
-            error_msg = f"Error: Failed to parse JSON response from Ollama API - {str(e)}"
-            print(f"{Fore.RED}{error_msg}{Style.RESET_ALL}")
-            print(f"{Fore.RED}Raw response: {response.text[:200]}...{Style.RESET_ALL}")
-            return error_msg
-            
-    except Exception as e:
-        error_type = type(e).__name__
-        error_msg = f"Unexpected error communicating with Ollama: {error_type} - {str(e)}"
-        print(f"{Fore.RED}{error_msg}{Style.RESET_ALL}")
-        
-        # Log the full error for debugging
-        import traceback
-        print(f"{Fore.RED}Error details:{Style.RESET_ALL}")
-        traceback.print_exc()
-        
-        return error_msg
+        data = response.json()
+        return data["message"]["content"]
+    except (json.JSONDecodeError, KeyError):
+        raise ValueError(f"Invalid JSON response: {response.text}")
 
 
 def _sanitize_response_content(content):
@@ -1204,7 +1195,7 @@ def _sanitize_response_content(content):
     
     # If we have unclosed thinking blocks (more opens than closes)
     if think_open_count > think_close_count:
-        print(f"{Fore.YELLOW}Warning: Detected {think_open_count - think_close_count} unclosed thinking block(s) in response{Style.RESET_ALL}")
+        print(f"Warning: Detected {think_open_count - think_close_count} unclosed thinking block(s) in response")
         
         # Find the last position of an unclosed <think> tag
         last_think_pos = content.rfind("<think>")
@@ -1215,13 +1206,100 @@ def _sanitize_response_content(content):
             # Truncate the content at the last unclosed <think> tag to prevent leaking
             # This is safer than trying to add closing tags which might be incorrect
             content = content[:last_think_pos]
-            print(f"{Fore.YELLOW}Truncated response at unclosed thinking block{Style.RESET_ALL}")
+            print(f"Truncated response at unclosed thinking block")
     
     # Handle any standalone think tags that might cause issues
     # This happens if we have mismatched tags elsewhere in the content
     content = re.sub(r'<think>[^<]*$', '', content)  # Remove trailing incomplete thinking blocks
     
     return content
+
+
+def get_ollama_response(history, model=None, timeout=None, allow_fallback=True):
+    """
+    Get a response from the Ollama API.
+    
+    Args:
+        history (list): The conversation history
+        model (str): The model to use, defaults to CURRENT_MODEL if None
+        timeout (int): Request timeout in seconds, defaults to DEFAULT_TIMEOUT if None
+        allow_fallback (bool): Whether to try other available models if the specified model fails
+        
+    Returns:
+        str: The model's response or an error message
+    """
+    # Use defaults if not specified
+    model_to_use = model if model is not None else CURRENT_MODEL
+    timeout_to_use = timeout if timeout is not None else DEFAULT_TIMEOUT
+    
+    try:
+        response = _try_get_ollama_response(history, model_to_use, timeout_to_use)
+        return _sanitize_response_content(response)
+    except requests.exceptions.Timeout:
+        error_message = f"Request to Ollama API timed out after {timeout_to_use} seconds. The model might be taking too long to respond."
+        print(f"{Fore.RED}{error_message}{Style.RESET_ALL}")
+        return f"Error: Request to Ollama timed out after {timeout_to_use} seconds. Consider increasing the timeout or using a smaller model."
+    except requests.exceptions.ConnectionError:
+        # Add a printed message suggesting to check if Ollama is still running
+        print("Connection error: Cannot connect to Ollama. Please check if Ollama is still running.")
+        return (
+            "Connection error: Cannot connect to Ollama. Please ensure Ollama is still running.\n"
+            "If not installed, download from: https://ollama.com/download\n"
+            "After installation, run 'ollama serve' in a separate terminal."
+        )
+    except requests.exceptions.HTTPError as e:
+        # Check if error is due to model not found (404)
+        if e.response.status_code == 404:
+            # Always print the model not found message
+            print(f"Model '{model_to_use}' not found.")
+            
+            if allow_fallback:
+                available_models = get_available_models()
+                
+                if available_models:
+                    fallback_model = available_models[0]
+                    print(f"Falling back to available model: {fallback_model}")
+                    
+                    # Add system message to history about fallback
+                    fallback_message = {
+                        "role": "system", 
+                        "content": f"Note: The requested model '{model_to_use}' was not available. Using '{fallback_model}' instead."
+                    }
+                    history.append(fallback_message)
+                    
+                    try:
+                        return _try_get_ollama_response(history, fallback_model, timeout_to_use)
+                    except Exception as fallback_err:
+                        return f"Error: Failed to use fallback model '{fallback_model}': {fallback_err}"
+                else:
+                    print("\nNo models available for fallback. To use this tool, you need to pull a model:")
+                    print("\n    ollama pull <model_name>")
+                    print("\nRecommended starter models:")
+                    print("- llama3 (Meta's Llama 3 8B model)")
+                    print("- mistral (Mistral AI's 7B model)")
+                    print("- neural-chat (Intelligent Neural Labs 7B model)")
+                    print("\nSee https://ollama.com/library for more options.")
+            
+            # If no fallback or fallback not applicable, return the original error
+            return f"Model '{model_to_use}' not found. Pull the model with 'ollama pull {model_to_use}' or use an available model."
+        
+        # Handle other HTTP errors
+        status_code = getattr(e.response, 'status_code', '?')
+        reason = getattr(e.response, 'reason', 'Unknown reason')
+        error_text = getattr(e.response, 'text', '')
+        
+        # Special handling for 500 errors
+        if status_code >= 500:
+            print(f"The Ollama server encountered an internal error. You may need to restart the Ollama server.")
+            return f"Error {status_code}: Internal server error. {error_text}"
+            
+        return f"Error {status_code} {reason}: {error_text}"
+    except ValueError as e:
+        if "Invalid JSON response" in str(e):
+            return f"Failed to parse JSON response: {e}"
+        return f"Error: {e}"
+    except Exception as e:
+        return f"Unexpected error: {e}"
 
 
 def extract_modified_content(response, file_path):
