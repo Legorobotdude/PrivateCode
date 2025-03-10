@@ -105,7 +105,8 @@ def check_ollama_connection():
 
 
 def detect_file_encoding(file_path):
-    """Detect the encoding of a file using chardet for robust detection.
+    """Detect the encoding of a file using a combination of BOM detection,
+    pattern analysis, and chardet for robust encoding detection.
     
     Returns:
         tuple: (encoding, bom) where bom is True if the file has a BOM
@@ -113,33 +114,94 @@ def detect_file_encoding(file_path):
     # First check for BOM using binary mode
     try:
         with open(file_path, 'rb') as f:
-            raw = f.read(4)  # Read first 4 bytes to check for BOM
-            # Check for BOM markers
+            # Read more bytes for better pattern detection
+            raw = f.read(32)  # Read first 32 bytes for more reliable detection
+            
+            # Empty file check
+            if not raw:
+                return 'utf-8', False
+                
+            # Check for BOM markers - BOM detection is the most reliable method
             if raw.startswith(b'\xef\xbb\xbf'):  # UTF-8 BOM
                 return 'utf-8-sig', True
+            elif raw.startswith(b'\xff\xfe\x00\x00'):  # UTF-32 LE BOM
+                return 'utf-32-le', True
+            elif raw.startswith(b'\x00\x00\xfe\xff'):  # UTF-32 BE BOM
+                return 'utf-32-be', True
             elif raw.startswith(b'\xff\xfe'):  # UTF-16 LE BOM
                 return 'utf-16-le', True
             elif raw.startswith(b'\xfe\xff'):  # UTF-16 BE BOM
                 return 'utf-16-be', True
+            
+            # No BOM found, use pattern detection for common encodings
+            # The order of these checks is important - check more specific patterns first
+            
+            # Check for UTF-32 patterns (must be checked before UTF-16)
+            if len(raw) >= 16:
+                # UTF-32-LE pattern: every 4th byte is non-zero, others are zero
+                # Common for ASCII text in UTF-32-LE
+                utf32_le_pattern = True
+                for i in range(0, min(16, len(raw)), 4):
+                    if i+3 < len(raw):
+                        # Check if bytes follow the pattern: X 0 0 0 (for ASCII in UTF-32-LE)
+                        if not (raw[i] != 0 and raw[i+1] == 0 and raw[i+2] == 0 and raw[i+3] == 0):
+                            utf32_le_pattern = False
+                            break
                 
-            # For UTF-16 files, we need to check the content
-            # UTF-16 files often have a pattern of alternating bytes
-            if len(raw) >= 2:
-                # Check for UTF-16 LE pattern (common in Windows)
-                if raw[0] != 0 and raw[1] == 0:
+                if utf32_le_pattern and len(raw) >= 8:
+                    return 'utf-32-le', False
+                
+                # UTF-32-BE pattern: first byte of each 4-byte group is zero
+                # Common for ASCII text in UTF-32-BE
+                utf32_be_pattern = True
+                for i in range(0, min(16, len(raw)), 4):
+                    if i+3 < len(raw):
+                        # Check if bytes follow the pattern: 0 0 0 X (for ASCII in UTF-32-BE)
+                        if not (raw[i] == 0 and raw[i+1] == 0 and raw[i+2] == 0 and raw[i+3] != 0):
+                            utf32_be_pattern = False
+                            break
+                
+                if utf32_be_pattern and len(raw) >= 8:
+                    return 'utf-32-be', False
+            
+            # Check for UTF-16 patterns - more strict checking to avoid false positives
+            if len(raw) >= 8:
+                # UTF-16-LE pattern: alternating non-zero and zero bytes for ASCII
+                utf16_le_pattern = True
+                zero_byte_count = 0
+                
+                # Check if pattern generally follows: X 0 X 0 X 0 (for ASCII in UTF-16-LE)
+                for i in range(min(16, len(raw))):
+                    if i % 2 == 1 and raw[i] == 0:
+                        zero_byte_count += 1
+                
+                # Check if at least half of even-indexed bytes are non-zero
+                # and most odd-indexed bytes are zero (for ASCII text)
+                non_zero_odd = sum(1 for i in range(0, min(16, len(raw)), 2) if raw[i] != 0)
+                if zero_byte_count >= 4 and non_zero_odd >= 3:
                     return 'utf-16-le', False
-                # Check for UTF-16 BE pattern
-                elif raw[0] == 0 and raw[1] != 0:
-                    return 'utf-16-be', False
-                    
-            # Rewind the file for chardet
-            f.seek(0)
-            # Sample the first 1KB of the file for efficiency
-            raw_data = f.read(1024)
-            if not raw_data:  # Empty file
-                return 'utf-8', False
                 
-            # Use chardet for robust encoding detection
+                # UTF-16-BE pattern: zero byte followed by non-zero byte for ASCII
+                utf16_be_pattern = True
+                zero_byte_count = 0
+                
+                # Check if pattern generally follows: 0 X 0 X 0 X (for ASCII in UTF-16-BE)
+                for i in range(min(16, len(raw))):
+                    if i % 2 == 0 and raw[i] == 0:
+                        zero_byte_count += 1
+                
+                # Check if at least half of odd-indexed bytes are non-zero
+                # and most even-indexed bytes are zero (for ASCII text)
+                non_zero_even = sum(1 for i in range(1, min(16, len(raw)), 2) if raw[i] != 0)
+                if zero_byte_count >= 4 and non_zero_even >= 3:
+                    return 'utf-16-be', False
+            
+            # Rewind the file for chardet analysis
+            f.seek(0)
+            # Sample the first 4KB of the file for better detection
+            raw_data = f.read(4096)
+            
+            # Use chardet for encoding detection when patterns aren't conclusive
             try:
                 result = chardet.detect(raw_data)
                 encoding = result['encoding']
@@ -157,7 +219,7 @@ def detect_file_encoding(file_path):
     except Exception as e:
         print(f"Warning: Error detecting encoding: {e}")
     
-    # Default to UTF-8 if detection failed
+    # Default to UTF-8 if all detection methods fail
     return 'utf-8', False
 
 
