@@ -898,8 +898,17 @@ def extract_file_paths_and_urls(query):
     urls = []
     
     for match in matches:
-        # Check if it's a URL (has domain-like structure)
-        if match.startswith(('http://', 'https://')) or ('.' in match and '/' in match and not ':' in match):
+        # Check if it's a URL - must start with http/https or have a valid domain structure
+        if match.startswith(('http://', 'https://')) or (
+            # Check for domain-like structure (e.g. example.com/path)
+            # but exclude common file path patterns like ./path or ../path
+            not match.startswith(('./', '../')) and
+            '.' in match and 
+            '/' in match and 
+            not ':' in match and
+            # Look for domain-like structure (letters/numbers followed by dot)
+            re.search(r'^[a-zA-Z0-9][a-zA-Z0-9-]*\.[a-zA-Z]{2,}', match)
+        ):
             urls.append(match)
         else:
             # Check if there's a line range specification
