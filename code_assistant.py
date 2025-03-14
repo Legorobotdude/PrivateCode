@@ -887,7 +887,8 @@ def extract_file_paths_and_urls(query):
     Extract file paths and URLs enclosed in square brackets from the query.
     Supports line range specifications in the format [filename:start-end], [filename:start-], or [filename:-end].
     """
-    pattern = r'\[([^\]]+)\]'
+    # Updated pattern to handle nested brackets
+    pattern = r'\[((?:[^\[\]]|\[(?:[^\[\]]|\[[^\[\]]*\])*\])*)\]'
     matches = re.findall(pattern, query)
     
     # Remove the bracketed content from the query
@@ -898,6 +899,10 @@ def extract_file_paths_and_urls(query):
     urls = []
     
     for match in matches:
+        # Skip empty matches
+        if not match.strip():
+            continue
+            
         # Check if it's a URL - must start with http/https or have a valid domain structure
         if match.startswith(('http://', 'https://')) or (
             # Check for domain-like structure (e.g. example.com/path)
