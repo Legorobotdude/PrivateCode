@@ -46,7 +46,8 @@ from colorama import init, Fore, Style
 init()
 
 # Configuration
-OLLAMA_API_URL = "http://localhost:11434/api/chat"
+OLLAMA_BASE_URL = "http://localhost:11434"  # Base URL for Ollama server. Change this if your Ollama instance runs elsewhere.
+OLLAMA_API_URL = OLLAMA_BASE_URL + "/api/chat"
 DEFAULT_MODEL = "qwq"  # Change to your preferred model
 CURRENT_MODEL = DEFAULT_MODEL  # Track the currently selected model
 MAX_SEARCH_RESULTS = 5      # Maximum number of search results to include
@@ -65,7 +66,7 @@ def check_ollama_connection():
     """Verify the Ollama server is running and accessible."""
     try:
         print("Checking Ollama connection...")
-        response = requests.get("http://localhost:11434/api/tags", timeout=5)
+        response = requests.get(OLLAMA_BASE_URL + "/api/tags", timeout=5)
         
         # This will raise an HTTPError for status codes 4XX/5XX
         response.raise_for_status()
@@ -891,69 +892,140 @@ def extract_file_paths_and_urls(query):
     pattern = r'\[((?:[^\[\]]|\[(?:[^\[\]]|\[[^\[\]]*\])*\])*)\]'
     matches = re.findall(pattern, query)
     
-    # Remove the bracketed content from the query
-    clean_query = re.sub(pattern, '', query).strip()
-    
     # Separate file paths and URLs
     file_paths = []
     urls = []
     
+    # Process matches first
     for match in matches:
-        # Skip empty matches
-        if not match.strip():
-            continue
-            
-        # Check if it's a URL - must start with http/https or have a valid domain structure
-        if match.startswith(('http://', 'https://')) or (
-            # Check for domain-like structure (e.g. example.com/path)
-            # but exclude common file path patterns like ./path or ../path
-            not match.startswith(('./', '../')) and
-            '.' in match and 
-            '/' in match and 
-            not ':' in match and
-            # Look for domain-like structure (letters/numbers followed by dot)
-            re.search(r'^[a-zA-Z0-9][a-zA-Z0-9-]*\.[a-zA-Z]{2,}', match)
-        ):
-            urls.append(match)
-        else:
-            # Check if there's a line range specification
-            if ':' in match:
-                parts = match.split(':', 1)
-                file_path = parts[0]
-                line_range = parts[1]
-                
-                # Parse the line range
-                start_line = None
-                end_line = None
-                
-                if '-' in line_range:
-                    range_parts = line_range.split('-', 1)
-                    
-                    # Handle start line
-                    if range_parts[0].strip():
-                        try:
-                            start_line = int(range_parts[0].strip())
-                        except ValueError:
-                            print(f"Warning: Invalid start line number in '{match}', using default")
-                    
-                    # Handle end line
-                    if len(range_parts) > 1 and range_parts[1].strip():
-                        try:
-                            end_line = int(range_parts[1].strip())
-                        except ValueError:
-                            print(f"Warning: Invalid end line number in '{match}', using default")
-                else:
-                    # Single line number
-                    try:
-                        start_line = int(line_range.strip())
-                        end_line = start_line + 1  # Read just this one line
-                    except ValueError:
-                        print(f"Warning: Invalid line number in '{match}', using default")
-                
-                file_paths.append((file_path, start_line, end_line))
+        # Only process non-empty matches for file/url categorization
+        if match.strip():
+            # Check if it's a URL - must start with http/https or have a valid domain structure
+            if match.startswith(('http://', 'https://')) or (
+                # Check for domain-like structure (e.g. example.com/path)
+                # but exclude common file path patterns like ./path or ../path
+                not match.startswith(('./', '../')) and
+                '.' in match and 
+                '/' in match and 
+                not ':' in match and
+                # Look for domain-like structure (letters/numbers followed by dot)
+                re.search(r'^[a-zA-Z0-9][a-zA-Z0-9-]*\.[a-zA-Z]{2,}', match)
+            ):
+                urls.append(match)
             else:
-                # No line range, just a file path
-                file_paths.append((match, None, None))
+                # Check if there's a line range specification
+                if ':' in match:
+                    parts = match.split(':', 1)
+                    file_path = parts[0]
+                    line_range = parts[1]
+                    
+                    # Parse the line range
+                    start_line = None
+                    end_line = None
+                    
+                    if '-' in line_range:
+                        range_parts = line_range.split('-', 1)
+                        
+                        # Handle start line
+                        if range_parts[0].strip():
+                            try:
+                                start_line = int(range_parts[0].strip())
+                            except ValueError:
+                                print(f"Warning: Invalid start line number in '{match}', using default")
+                        
+                        # Handle end line
+                        if len(range_parts) > 1 and range_parts[1].strip():
+                            try:
+                                end_line = int(range_parts[1].strip())
+                            except ValueError:
+                                print(f"Warning: Invalid end line number in '{match}', using default")
+                    else:
+                        # Single line number
+                        try:
+                            start_line = int(line_range.strip())
+                            end_line = start_line + 1  # Read just this one line
+                        except ValueError:
+                            print(f"Warning: Invalid line number in '{match}', using default")
+                    
+                    file_paths.append((file_path, start_line, end_line))
+                else:
+                    # No line range, just a file path
+                    file_paths.append((match, None, None))
+    
+    # Handle clean query by preserving empty brackets and maintaining spacing
+    clean_query = query
+    
+    # Find all bracket positions
+    bracket_positions = []
+    stack = []
+    for i, char in enumerate(query):
+        if char == '[':
+            stack.append(i)
+        elif char == ']' and stack:
+            start = stack.pop()
+            bracket_positions.append((start, i + 1))
+    
+    # Sort positions in reverse order to replace from end to start
+    bracket_positions.sort(reverse=True)
+    
+    # Replace each bracketed section
+    for start, end in bracket_positions:
+        content = query[start + 1:end - 1]
+        if not content.strip():  # Empty brackets
+            clean_query = clean_query[:start] + '[]' + clean_query[end:]
+        else:  # Non-empty brackets
+            # Check if we're next to punctuation
+            next_char = clean_query[end:end + 1] if end < len(clean_query) else ''
+            prev_char = clean_query[start - 1:start] if start > 0 else ''
+            
+            # Add double spaces between words, single space around punctuation
+            if next_char in ',.:;' or prev_char in ',.:;':
+                clean_query = clean_query[:start] + ' ' + clean_query[end:]
+            else:
+                # Find the next non-space character
+                next_word = False
+                for i in range(end, len(clean_query)):
+                    if clean_query[i].isalnum():
+                        next_word = True
+                        break
+                    elif clean_query[i] in ',.:;':
+                        next_word = False
+                        break
+                
+                # Find the previous non-space character
+                prev_word = False
+                for i in range(start - 1, -1, -1):
+                    if clean_query[i].isalnum():
+                        prev_word = True
+                        break
+                    elif clean_query[i] in ',.:;':
+                        prev_word = False
+                        break
+                
+                # Add double space if between words
+                if prev_word and next_word:
+                    clean_query = clean_query[:start] + '  ' + clean_query[end:]
+                else:
+                    clean_query = clean_query[:start] + ' ' + clean_query[end:]
+    
+    # Clean up any multiple spaces beyond two
+    clean_query = re.sub(r'\s{3,}', '  ', clean_query).strip()
+    
+    # Fix spacing around punctuation
+    clean_query = re.sub(r'\s*([.:;])\s*', r'\1 ', clean_query)  # Other punctuation
+    clean_query = re.sub(r'\s*,\s*', ' , ', clean_query)  # Ensure space before and after comma
+    clean_query = re.sub(r'\s{3,}', '  ', clean_query).strip()
+    
+    # For commas, ensure exactly one space before and after each comma
+    clean_query = re.sub(r'\s*,\s*', ' , ', clean_query)
+    # Only collapse sequences of three or more spaces to two (do not collapse double spaces)
+    clean_query = re.sub(r'\s{3,}', '  ', clean_query).strip()
+    # Special case: collapse double spaces that occur between commas to a single space
+    clean_query = re.sub(r',  ,', ', ,', clean_query)
+    
+    # If there are no matches (unclosed brackets), return the original query
+    if not matches:
+        return query, file_paths, urls
     
     return clean_query, file_paths, urls
 
@@ -1132,7 +1204,7 @@ def get_available_models():
         list: A list of available model names, or an empty list if none found or if an error occurs
     """
     try:
-        response = requests.get("http://localhost:11434/api/tags", timeout=5)
+        response = requests.get(OLLAMA_BASE_URL + "/api/tags", timeout=5)
         response.raise_for_status()
         data = response.json()
         return [model["name"] for model in data.get("models", [])]
@@ -1171,7 +1243,7 @@ def _try_get_ollama_response(history, model, timeout=DEFAULT_TIMEOUT):
     }
     
     response = requests.post(
-        "http://localhost:11434/api/chat",
+        OLLAMA_API_URL,
         json=payload,
         timeout=timeout
     )
@@ -2228,7 +2300,7 @@ def handle_model_query(user_input, conversation_history):
     # Special case for listing models
     if model_name == "list":
         try:
-            response = requests.get("http://localhost:11434/api/tags")
+            response = requests.get(OLLAMA_BASE_URL + "/api/tags")
             if response.status_code == 200:
                 available_models = [model.get("name") for model in response.json().get("models", [])]
                 if available_models:
@@ -2263,7 +2335,7 @@ def handle_model_query(user_input, conversation_history):
     try:
         # Check if the model is available
         try:
-            response = requests.get("http://localhost:11434/api/tags")
+            response = requests.get(OLLAMA_BASE_URL + "/api/tags")
             if response.status_code == 200:
                 available_models = [model.get("name") for model in response.json().get("models", [])]
                 

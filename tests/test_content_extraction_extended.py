@@ -86,9 +86,10 @@ class TestContentExtractionExtended:
         clean_query, file_items, urls = code_assistant.extract_file_paths_and_urls(query)
         assert clean_query == "Check , , and"
         assert len(file_items) == 1
+        assert file_items[0][0] == "file.py"
         assert len(urls) == 2
-        assert "https://site1.com" in urls
-        assert "https://site2.com" in urls
+        assert urls[0] == "https://site1.com"
+        assert urls[1] == "https://site2.com"
     
     def test_url_extraction_variants(self):
         """Test extracting various URL formats."""
