@@ -1,5 +1,7 @@
 # Vibecoder.gg (Local LLM Coding Assistant)
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](./LICENSE)
+
 A terminal-based coding assistant that uses local Large Language Models (LLMs) via Ollama to provide coding help and answer programming questions. The assistant can also search the web for information while maintaining privacy, edit files, and execute commands with user confirmation.
 
 ## Features
@@ -450,3 +452,7 @@ The plan will be executed interactively, allowing you to:
 - Review each step before execution
 - Skip steps you don't want to execute
 - Save the plan to a JSON file for later use
+
+## License
+
+This project is licensed under the MIT License (c) 2025 Aditya Bawankule. See the [LICENSE](./LICENSE) file for details.
